@@ -90,8 +90,27 @@ docker compose up -d
 | El Paso Automation | nelsonblaha/elpasoautomation | Python | pytest, deploy |
 | Video Games | Groovitation/video-games | Scala/Play | sbt, deploy |
 
+## Automatic Propagation
+
+When nelnet-ci is updated, it automatically triggers CI runs in all dependent repos:
+1. nelnet-ci tests pass
+2. `repository_dispatch` events sent to homepage, priorities, elpasoautomation, video-games
+3. Those repos re-run their CI with the latest shared workflows
+
+To receive dispatch events, dependent repos need this trigger in their workflow:
+```yaml
+on:
+  push:
+    branches: [main, master]
+  repository_dispatch:
+    types: [nelnet-ci-updated]
+```
+
+Requires a `DISPATCH_PAT` secret with `repo` scope for all target repos.
+
 ## Security Notes
 
 - Runners only trigger on `push` to main/master (not on PRs)
 - PRs from forks cannot trigger runners (security risk)
 - PATs are stored in `.env` files (gitignored)
+- `DISPATCH_PAT` needs access to all dependent repos
