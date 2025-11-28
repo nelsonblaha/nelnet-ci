@@ -83,11 +83,12 @@ docker compose up -d
 
 ## Projects Using This Infrastructure
 
-| Project | Status | Language |
-|---------|--------|----------|
-| [Homepage](https://github.com/nelsonblaha/homepage) | [![CI](https://github.com/nelsonblaha/homepage/actions/workflows/ci.yml/badge.svg)](https://github.com/nelsonblaha/homepage/actions/workflows/ci.yml) | Python/FastAPI |
-| [Priorities](https://github.com/nelsonblaha/priorities) | [![CI](https://github.com/nelsonblaha/priorities/actions/workflows/deploy.yml/badge.svg)](https://github.com/nelsonblaha/priorities/actions/workflows/deploy.yml) | Rust/Actix |
-| [El Paso Automation](https://github.com/nelsonblaha/elpasoautomation) | [![CI](https://github.com/nelsonblaha/elpasoautomation/actions/workflows/deploy.yml/badge.svg)](https://github.com/nelsonblaha/elpasoautomation/actions/workflows/deploy.yml) | Ruby/Rails |
+| Project | Repo | Language | Workflows |
+|---------|------|----------|-----------|
+| Homepage | nelsonblaha/homepage | Python/FastAPI | pytest, cypress, deploy |
+| Priorities | nelsonblaha/priorities | Scala/Play | sbt, cypress, deploy |
+| El Paso Automation | nelsonblaha/elpasoautomation | Python | pytest, deploy |
+| Video Games | Groovitation/video-games | Scala/Play | sbt, deploy |
 
 ## Automatic Propagation
 
