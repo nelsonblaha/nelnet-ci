@@ -114,3 +114,4 @@ Requires a `DISPATCH_PAT` secret with `repo` scope for all target repos.
 - PRs from forks cannot trigger runners (security risk)
 - PATs are stored in `.env` files (gitignored)
 - `DISPATCH_PAT` needs access to all dependent repos
+
