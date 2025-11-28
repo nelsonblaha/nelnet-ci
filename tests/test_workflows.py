@@ -24,7 +24,8 @@ def test_reusable_workflows_have_workflow_call():
         if workflow_file.exists():
             with open(workflow_file) as f:
                 data = yaml.safe_load(f)
-                triggers = data.get("on", {})
+                # YAML parses 'on' as boolean True, so check both
+                triggers = data.get("on") or data.get(True) or {}
                 assert "workflow_call" in triggers, f"{name} missing workflow_call trigger"
 
 
