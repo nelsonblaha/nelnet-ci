@@ -169,18 +169,16 @@ def get_runner_containers() -> list:
                             if len(parts) >= 2:
                                 runner_info["repo"] = f"{parts[-2]}/{parts[-1]}"
 
-                    # Check latest log for job status
-                    result = c.exec_run("sh -c 'cat $(ls -t /actions-runner/_diag/Runner_*.log 2>/dev/null | head -1) | tail -20'", stderr=False)
-                    if result.exit_code == 0:
-                        log_content = result.output.decode()
-                        if "Running job:" in log_content:
-                            # Extract job name
-                            for line in log_content.split('\n'):
-                                if "Running job:" in line:
-                                    runner_info["job"] = line.split("Running job:")[-1].strip()
-                                    break
-                        elif "Listening for Jobs" in log_content:
-                            runner_info["job"] = "idle"
+                    # Check docker logs for job status (more reliable than internal log files)
+                    log_content = c.logs(tail=50).decode()
+                    if "Running job:" in log_content:
+                        # Extract job name - find the last "Running job:" line
+                        for line in reversed(log_content.split('\n')):
+                            if "Running job:" in line:
+                                runner_info["job"] = line.split("Running job:")[-1].strip()
+                                break
+                    elif "Listening for Jobs" in log_content:
+                        runner_info["job"] = "idle"
                 except Exception:
                     pass
 
