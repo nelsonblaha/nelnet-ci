@@ -10,14 +10,22 @@ services:
       - PLEX_URL=${PLEX_URL:-http://host.docker.internal:32400}
       - PLEX_TOKEN=${PLEX_TOKEN}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - VIRTUAL_HOST=ci.blaha.io
+      - VIRTUAL_PORT=8000
+      - LETSENCRYPT_HOST=ci.blaha.io
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - infra-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+networks:
+  infra-net:
+    external: true

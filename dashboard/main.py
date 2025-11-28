@@ -139,18 +139,52 @@ def get_docker_client():
 
 
 def get_runner_containers() -> list:
-    """Get all GitHub runner containers."""
+    """Get all GitHub runner containers with job info."""
     client = get_docker_client()
     containers = client.containers.list(all=True)
     runners = []
     for c in containers:
         if "runner" in c.name.lower() and "github" in c.name.lower():
-            runners.append({
+            runner_info = {
                 "id": c.short_id,
                 "name": c.name,
                 "status": c.status,
                 "health": c.attrs.get("State", {}).get("Health", {}).get("Status", "unknown"),
-            })
+                "job": None,
+                "repo": None,
+            }
+
+            # Try to get job info from runner logs
+            if c.status == "running":
+                try:
+                    # Get repo from .runner config
+                    result = c.exec_run("cat /actions-runner/.runner", stderr=False)
+                    if result.exit_code == 0:
+                        import json
+                        runner_config = json.loads(result.output.decode())
+                        github_url = runner_config.get("gitHubUrl", "")
+                        if github_url:
+                            # Extract owner/repo from URL
+                            parts = github_url.rstrip("/").split("/")
+                            if len(parts) >= 2:
+                                runner_info["repo"] = f"{parts[-2]}/{parts[-1]}"
+
+                    # Check latest log for job status
+                    result = c.exec_run("sh -c 'cat $(ls -t /actions-runner/_diag/Runner_*.log 2>/dev/null | head -1) | tail -20'", stderr=False)
+                    if result.exit_code == 0:
+                        log_content = result.output.decode()
+                        if "Running job:" in log_content:
+                            # Extract job name
+                            for line in log_content.split('\n'):
+                                if "Running job:" in line:
+                                    runner_info["job"] = line.split("Running job:")[-1].strip()
+                                    break
+                        elif "Listening for Jobs" in log_content:
+                            runner_info["job"] = "idle"
+                except Exception:
+                    pass
+
+            runners.append(runner_info)
     return runners
 
 
@@ -370,12 +404,12 @@ async def get_repo_badge(owner: str, repo: str):
         color = "lightgrey"
         label = "unknown"
 
+    # shields.io only accepts specific properties - url is not allowed
     return {
         "schemaVersion": 1,
         "label": "CI",
         "message": label,
         "color": color,
-        "url": status.get("url"),
     }
 
 
@@ -412,9 +446,32 @@ async def dashboard():
             <div class="bg-gray-800 rounded-lg p-4">
                 <h2 class="text-lg font-semibold mb-2">System</h2>
                 <div x-show="status.system">
-                    <p>CPU: <span x-text="status.system?.cpu_percent + '%'"></span> (<span x-text="status.system?.cpu_count"></span> cores)</p>
-                    <p>Memory: <span x-text="status.system?.memory_used_gb + '/' + status.system?.memory_total_gb + ' GB'"></span></p>
-                    <p>Load: <span x-text="status.system?.load_avg?.map(l => l.toFixed(2)).join(', ')"></span></p>
+                    <!-- CPU Progress Bar -->
+                    <div class="mb-3">
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>CPU</span>
+                            <span x-text="status.system?.cpu_percent + '%'"></span>
+                        </div>
+                        <div class="w-full bg-gray-700 rounded-full h-3">
+                            <div class="h-3 rounded-full transition-all duration-300"
+                                 :class="status.system?.cpu_percent > 80 ? 'bg-red-500' : status.system?.cpu_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
+                                 :style="'width: ' + status.system?.cpu_percent + '%'"></div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1"><span x-text="status.system?.cpu_count"></span> cores</p>
+                    </div>
+                    <!-- Memory Progress Bar -->
+                    <div class="mb-3">
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Memory</span>
+                            <span x-text="status.system?.memory_used_gb + '/' + status.system?.memory_total_gb + ' GB'"></span>
+                        </div>
+                        <div class="w-full bg-gray-700 rounded-full h-3">
+                            <div class="h-3 rounded-full transition-all duration-300"
+                                 :class="status.system?.memory_percent > 80 ? 'bg-red-500' : status.system?.memory_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
+                                 :style="'width: ' + status.system?.memory_percent + '%'"></div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-500">Load: <span x-text="status.system?.load_avg?.map(l => l.toFixed(2)).join(', ')"></span></p>
                 </div>
             </div>
 
@@ -430,19 +487,36 @@ async def dashboard():
             <div class="bg-gray-800 rounded-lg p-4">
                 <h2 class="text-lg font-semibold mb-2">Runners</h2>
                 <div x-show="status.runners">
-                    <p>Active: <span x-text="status.runners?.healthy + '/' + status.runners?.count"></span></p>
-                    <template x-for="r in status.runners?.containers" :key="r.id">
-                        <p class="text-sm" :class="r.health === 'healthy' ? 'text-green-400' : 'text-yellow-400'">
-                            <span x-text="r.name"></span>: <span x-text="r.status"></span>
-                        </p>
-                    </template>
+                    <p class="mb-2">Active: <span x-text="status.runners?.healthy + '/' + status.runners?.count"></span></p>
+                    <div class="space-y-2">
+                        <template x-for="r in status.runners?.containers" :key="r.id">
+                            <div class="bg-gray-700/50 rounded p-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="inline-block w-2 h-2 rounded-full"
+                                          :class="r.health === 'healthy' ? 'bg-green-400' : 'bg-yellow-400'"></span>
+                                    <span class="text-sm font-medium" x-text="r.name.replace('github-runners-', '')"></span>
+                                </div>
+                                <div class="text-xs text-gray-400 mt-1 ml-4">
+                                    <span x-show="r.repo" x-text="r.repo"></span>
+                                    <span x-show="r.job && r.job !== 'idle'" class="text-yellow-400">
+                                        → <span x-text="r.job"></span>
+                                    </span>
+                                    <span x-show="r.job === 'idle'" class="text-gray-500">idle</span>
+                                    <span x-show="!r.job && r.status !== 'running'" class="text-gray-500" x-text="r.status"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Repos -->
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
-            <h2 class="text-lg font-semibold mb-4">Configured Repositories</h2>
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold">Configured Repositories</h2>
+                <span class="text-xs text-gray-500">Auto-refreshes every minute</span>
+            </div>
             <table class="w-full">
                 <thead>
                     <tr class="text-left border-b border-gray-700">
@@ -462,9 +536,12 @@ async def dashboard():
                                    x-text="repo.owner + '/' + repo.name"></a>
                             </td>
                             <td class="py-2">
-                                <a :href="repo.ci_status?.url" target="_blank"
-                                   :class="getStatusClass(repo.ci_status)"
-                                   x-text="getStatusText(repo.ci_status)"></a>
+                                <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-2">
+                                    <span class="inline-block w-3 h-3 rounded-full"
+                                          :class="getStatusDotClass(repo.ci_status)"></span>
+                                    <span :class="getStatusClass(repo.ci_status)"
+                                          x-text="getStatusText(repo.ci_status)"></span>
+                                </a>
                             </td>
                             <td class="py-2">
                                 <img :src="'https://img.shields.io/endpoint?url=' + encodeURIComponent(window.location.origin + '/api/repos/' + repo.owner + '/' + repo.name + '/badge')"
@@ -475,7 +552,6 @@ async def dashboard():
                                       x-text="repo.allow_pr_tests ? 'Enabled (risky!)' : 'Disabled'"></span>
                             </td>
                             <td class="py-2">
-                                <button @click="showBadgeUrl(repo)" class="text-blue-400 hover:text-blue-300 mr-2">Badge URL</button>
                                 <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300">Remove</button>
                             </td>
                         </tr>
@@ -543,13 +619,9 @@ async def dashboard():
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
 
             async init() {
-                if (!localStorage.getItem('adminToken')) {
-                    const token = prompt('Enter admin password:');
-                    if (token) localStorage.setItem('adminToken', token);
-                    this.authHeader = { 'Authorization': 'Bearer ' + token };
-                }
                 await this.refresh();
                 setInterval(() => this.loadStatus(), 10000);
+                setInterval(() => this.loadRepos(), 60000);  // Refresh repos every minute
             },
 
             async refresh() {
@@ -574,13 +646,6 @@ async def dashboard():
             async loadConfig() {
                 const resp = await fetch('/api/config', { headers: this.authHeader });
                 if (resp.ok) this.config = await resp.json();
-            },
-
-            showBadgeUrl(repo) {
-                const badgeEndpoint = window.location.origin + '/api/repos/' + repo.owner + '/' + repo.name + '/badge';
-                const shieldsUrl = 'https://img.shields.io/endpoint?url=' + encodeURIComponent(badgeEndpoint);
-                const markdown = '[![CI](' + shieldsUrl + ')](' + (repo.ci_status?.url || 'https://github.com/' + repo.owner + '/' + repo.name + '/actions') + ')';
-                prompt('Badge markdown for README:', markdown);
             },
 
             async addRepo() {
@@ -627,6 +692,14 @@ async def dashboard():
                 if (status.conclusion === 'failure') return 'text-red-400';
                 if (status.status === 'in_progress') return 'text-yellow-400';
                 return 'text-gray-400';
+            },
+
+            getStatusDotClass(status) {
+                if (!status) return 'bg-gray-400';
+                if (status.conclusion === 'success') return 'bg-green-400';
+                if (status.conclusion === 'failure') return 'bg-red-400';
+                if (status.status === 'in_progress') return 'bg-yellow-400 animate-pulse';
+                return 'bg-gray-400';
             },
 
             getStatusText(status) {
