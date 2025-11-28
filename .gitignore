@@ -2,6 +2,9 @@
 .env
 *.env
 
+# Dashboard data
+dashboard/data/
+
 # IDE
 .idea/
 .vscode/

@@ -1,0 +1,21 @@
+services:
+  dashboard:
+    build: .
+    container_name: nelnet-ci-dashboard
+    restart: unless-stopped
+    ports:
+      - "8101:8000"
+    environment:
+      - DATABASE_PATH=/data/nelnet-ci.db
+      - PLEX_URL=${PLEX_URL:-http://172.17.0.1:32400}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
