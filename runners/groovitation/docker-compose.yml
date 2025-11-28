@@ -1,0 +1,65 @@
+# GitHub Actions Self-Hosted Runner for Groovitation/video-games
+# Uses the same Cypress-capable image as Homepage runners
+#
+# Setup:
+# 1. Create a GitHub PAT with 'repo' scope for Groovitation
+# 2. Export GITHUB_PAT_GROOVITATION=your_token
+# 3. docker-compose up -d
+
+services:
+  runner:
+    image: github-runner-cypress:latest
+    restart: unless-stopped
+    environment:
+      # Repo-specific runner for video-games
+      - REPO_URL=https://github.com/Groovitation/video-games
+      - RUNNER_SCOPE=repo
+
+      # Authentication
+      - ACCESS_TOKEN=${GITHUB_PAT_GROOVITATION}
+
+      # Runner naming
+      - RUNNER_NAME_PREFIX=nelnet-groov
+      - RANDOM_RUNNER_SUFFIX=true
+
+      # Labels
+      - LABELS=self-hosted,linux,x64,nelnet
+
+      # Work directory
+      - RUNNER_WORKDIR=/tmp/github-runner
+
+      # Ephemeral mode
+      - EPHEMERAL=true
+      - DISABLE_AUTO_UPDATE=true
+
+    volumes:
+      # Docker-in-docker support
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Persist runner data
+      - groov-runner-data:/home/runner
+
+      # Mount source directory for deployments
+      - /home/ben/src/video-games:/home/ben/src/video-games
+      - /home/ben/stacks/video-games:/home/ben/stacks/video-games
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - default
+      - blaha-ci-shared
+
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "Runner.Listener"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  groov-runner-data:
+
+networks:
+  blaha-ci-shared:
+    external: true

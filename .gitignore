@@ -1,0 +1,10 @@
+# Environment files with secrets
+.env
+*.env
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
