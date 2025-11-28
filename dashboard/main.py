@@ -161,7 +161,7 @@ def get_runner_containers() -> list:
                     result = c.exec_run("cat /actions-runner/.runner", stderr=False)
                     if result.exit_code == 0:
                         import json
-                        runner_config = json.loads(result.output.decode())
+                        runner_config = json.loads(result.output.decode('utf-8-sig'))
                         github_url = runner_config.get("gitHubUrl", "")
                         if github_url:
                             # Extract owner/repo from URL
