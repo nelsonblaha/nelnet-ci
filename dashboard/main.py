@@ -27,6 +27,7 @@ PLEX_URL = os.environ.get("PLEX_URL", "")
 PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_USERS = os.environ.get("ADMIN_USERS", "Ben").split(",")
 
 
 def validate_config():
@@ -517,6 +518,25 @@ async def check_user(username: str):
     return {"username": username, "approved": approved}
 
 
+@app.get("/api/user-info")
+async def get_user_info(request: Request):
+    """Get current user info from Homepage's X-Remote-User header."""
+    remote_user = request.headers.get("X-Remote-User", "")
+    is_admin = remote_user in ADMIN_USERS if remote_user else False
+
+    # Also check Authorization header for ADMIN_PASSWORD
+    if not is_admin and ADMIN_PASSWORD:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:] == ADMIN_PASSWORD:
+            is_admin = True
+
+    return {
+        "username": remote_user or "Anonymous",
+        "authenticated": bool(remote_user),
+        "isAdmin": is_admin,
+    }
+
+
 @app.get("/api/config")
 async def get_config(_: bool = Depends(verify_admin)):
     """Get current configuration."""
@@ -587,7 +607,14 @@ async def dashboard():
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
     <div x-data="dashboard()" x-init="init()" class="container mx-auto px-4 py-8">
-        <h1 class="text-3xl font-bold mb-8">Nelnet CI Dashboard</h1>
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">Nelnet CI Dashboard</h1>
+            <div class="text-sm text-right">
+                <span x-text="userInfo.username" class="text-gray-400"></span>
+                <span x-show="!userInfo.isAdmin" class="ml-2 bg-yellow-600 text-white px-2 py-1 rounded text-xs">Read-only</span>
+                <span x-show="userInfo.isAdmin" class="ml-2 bg-green-600 text-white px-2 py-1 rounded text-xs">Admin</span>
+            </div>
+        </div>
 
         <!-- System Status -->
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
@@ -656,7 +683,9 @@ async def dashboard():
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
-                                <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300 text-sm">&times;</button>
+                                <button @click="removeRepo(repo)" :disabled="!userInfo.isAdmin"
+                                        :class="userInfo.isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-600 cursor-not-allowed'"
+                                        class="text-sm" :title="userInfo.isAdmin ? 'Remove repo' : 'Admin only'">&times;</button>
                             </div>
                         </div>
 
@@ -685,13 +714,19 @@ async def dashboard():
 
             <!-- Add repo form -->
             <div class="mt-4 flex flex-col sm:flex-row gap-2">
-                <input x-model="newRepo.owner" placeholder="owner" class="bg-gray-700 px-3 py-2 rounded w-full sm:w-auto">
-                <input x-model="newRepo.name" placeholder="repo" class="bg-gray-700 px-3 py-2 rounded w-full sm:w-auto">
-                <label class="flex items-center gap-2 py-2 sm:py-0">
-                    <input type="checkbox" x-model="newRepo.allow_pr_tests">
+                <input x-model="newRepo.owner" placeholder="owner" :disabled="!userInfo.isAdmin"
+                       :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                       class="px-3 py-2 rounded w-full sm:w-auto">
+                <input x-model="newRepo.name" placeholder="repo" :disabled="!userInfo.isAdmin"
+                       :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                       class="px-3 py-2 rounded w-full sm:w-auto">
+                <label class="flex items-center gap-2 py-2 sm:py-0" :class="!userInfo.isAdmin && 'opacity-50'">
+                    <input type="checkbox" x-model="newRepo.allow_pr_tests" :disabled="!userInfo.isAdmin">
                     <span class="text-sm">Allow PR tests</span>
                 </label>
-                <button @click="addRepo()" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500 w-full sm:w-auto">Add</button>
+                <button @click="addRepo()" :disabled="!userInfo.isAdmin"
+                        :class="userInfo.isAdmin ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'"
+                        class="px-4 py-2 rounded w-full sm:w-auto">Add</button>
             </div>
         </div>
 
@@ -722,13 +757,19 @@ async def dashboard():
                 <template x-for="user in approvedUsers" :key="user.id">
                     <span class="bg-gray-700 px-2 py-1 rounded flex items-center gap-2 text-sm">
                         <span x-text="user.github_username"></span>
-                        <button @click="removeUser(user)" class="text-red-400 hover:text-red-300">&times;</button>
+                        <button @click="removeUser(user)" :disabled="!userInfo.isAdmin"
+                                :class="userInfo.isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-600 cursor-not-allowed'"
+                                :title="userInfo.isAdmin ? 'Remove user' : 'Admin only'">&times;</button>
                     </span>
                 </template>
             </div>
             <div class="flex flex-col sm:flex-row gap-2">
-                <input x-model="newUsername" placeholder="GitHub username" class="bg-gray-700 px-3 py-2 rounded flex-1">
-                <button @click="addUser()" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500">Add User</button>
+                <input x-model="newUsername" placeholder="GitHub username" :disabled="!userInfo.isAdmin"
+                       :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                       class="px-3 py-2 rounded flex-1">
+                <button @click="addUser()" :disabled="!userInfo.isAdmin"
+                        :class="userInfo.isAdmin ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'"
+                        class="px-4 py-2 rounded">Add User</button>
             </div>
         </div>
     </div>
@@ -740,6 +781,7 @@ async def dashboard():
             repos: [],
             approvedUsers: [],
             config: {},
+            userInfo: { username: 'Loading...', isAdmin: false, authenticated: false },
             newRepo: { owner: '', name: '', allow_pr_tests: false },
             newUsername: '',
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
@@ -750,10 +792,20 @@ async def dashboard():
             showFrecencyBars: false,
 
             async init() {
+                await this.loadUserInfo();
                 await this.refresh();
                 setInterval(() => this.loadStatus(), 10000);  // System status every 10s
                 setInterval(() => this.loadRepos(), 10000);   // Repos & runners every 10s
                 setInterval(() => this.updateReposAge(), 1000);  // Update age display every second
+            },
+
+            async loadUserInfo() {
+                try {
+                    const resp = await fetch('/api/user-info');
+                    if (resp.ok) this.userInfo = await resp.json();
+                } catch (e) {
+                    console.error('Failed to load user info:', e);
+                }
             },
 
             updateReposAge() {
