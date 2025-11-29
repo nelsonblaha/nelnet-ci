@@ -405,16 +405,17 @@ async def list_repos(_: bool = Depends(verify_admin)):
         rows = await cursor.fetchall()
         repos = [dict(row) for row in rows]
 
-    # Fetch CI status and jobs for each repo concurrently
+    # Get all runners and map them to repos
+    all_runners = get_runner_containers()
+
+    # Fetch CI status for each repo and attach matching runners
     import asyncio
 
     async def fetch_repo_data(repo):
-        status, jobs = await asyncio.gather(
-            get_workflow_status(repo["owner"], repo["name"]),
-            get_workflow_jobs(repo["owner"], repo["name"])
-        )
-        repo["ci_status"] = status
-        repo["jobs"] = jobs
+        repo["ci_status"] = await get_workflow_status(repo["owner"], repo["name"])
+        # Find runners assigned to this repo
+        repo_full = f"{repo['owner']}/{repo['name']}"
+        repo["runners"] = [r for r in all_runners if r.get("repo") == repo_full]
 
     await asyncio.gather(*[fetch_repo_data(repo) for repo in repos])
 
@@ -624,21 +625,18 @@ async def dashboard():
                             </div>
                         </div>
 
-                        <!-- Jobs list -->
-                        <div x-show="repo.jobs && repo.jobs.length > 0" class="ml-6 mt-3 space-y-1">
-                            <template x-for="job in repo.jobs" :key="job.name + job.started_at">
+                        <!-- Runners list -->
+                        <div x-show="repo.runners && repo.runners.length > 0" class="ml-6 mt-3 space-y-1">
+                            <template x-for="runner in repo.runners" :key="runner.id">
                                 <div class="flex items-center gap-2 text-sm">
                                     <span class="inline-block w-2 h-2 rounded-full"
-                                          :class="job.conclusion === 'success' ? 'bg-green-400' :
-                                                  job.conclusion === 'failure' ? 'bg-red-400' :
-                                                  job.status === 'in_progress' ? 'bg-yellow-400 animate-pulse' :
-                                                  job.status === 'queued' ? 'bg-gray-400 animate-pulse' : 'bg-gray-400'"></span>
-                                    <a :href="job.run_url" target="_blank" class="text-gray-300 hover:text-white" x-text="job.name"></a>
+                                          :class="runner.health !== 'healthy' ? 'bg-red-400' :
+                                                  runner.job && runner.job !== 'idle' ? 'bg-yellow-400 animate-pulse' :
+                                                  'bg-green-400'"></span>
+                                    <span class="text-gray-300" x-text="runner.name.replace('github-runners-', '').replace('-1', '')"></span>
                                     <span class="text-xs text-gray-500"
-                                          x-text="job.status === 'in_progress' ? 'running' :
-                                                  job.status === 'queued' ? 'queued' :
-                                                  job.conclusion || job.status"></span>
-                                    <span x-show="job.runner_name" class="text-xs text-gray-600" x-text="'on ' + job.runner_name"></span>
+                                          x-text="runner.health !== 'healthy' ? runner.health :
+                                                  runner.job && runner.job !== 'idle' ? runner.job : 'idle'"></span>
                                 </div>
                             </template>
                         </div>
