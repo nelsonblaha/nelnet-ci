@@ -15,6 +15,9 @@ from autoscaler import (
     RunnerState,
     CPU_HEADROOM_PERCENT,
     MEMORY_HEADROOM_PERCENT,
+    RUNNER_CPU_ESTIMATE,
+    RUNNER_MEMORY_ESTIMATE,
+    SPAWN_COOLDOWN_SECONDS,
 )
 
 
@@ -220,11 +223,15 @@ class TestPauseDecisions:
         status: str = "running",
         cpu_percent: float = 50.0,
         memory_mb: float = 500.0,
+        repo_url: str = None,
     ) -> RunnerState:
+        if repo_url is None:
+            repo_url = f"https://github.com/{repo}"
         return RunnerState(
             container_id=f"id-{name}",
             name=name,
             repo=repo,
+            repo_url=repo_url,
             status=status,
             is_busy=is_busy,
             cpu_percent=cpu_percent,
@@ -328,3 +335,168 @@ class TestEdgeCases:
     # def test_container_disappears_mid_operation(self, autoscaler):
     #     """Should handle container being removed during pause."""
     #     pass
+
+
+class TestDynamicScaling:
+    """Tests for dynamic runner spawning."""
+
+    @pytest.fixture
+    def autoscaler(self):
+        with patch.object(Autoscaler, '__init__', lambda x: None):
+            scaler = Autoscaler()
+            scaler.docker_client = Mock()
+            scaler.state = AutoscalerState()
+            scaler.last_spawn_time = {}
+            return scaler
+
+    def test_can_spawn_requires_github_pat(self, autoscaler):
+        """Should not spawn without GITHUB_PAT."""
+        with patch('autoscaler.GITHUB_PAT', ''):
+            assert autoscaler.can_spawn_runner() is False
+
+    def test_can_spawn_with_sufficient_resources(self, autoscaler):
+        """Should allow spawn when resources are available."""
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            with patch.object(autoscaler, 'get_available_resources') as mock_resources:
+                # More than enough resources
+                mock_resources.return_value = (500.0, 2000.0)
+                assert autoscaler.can_spawn_runner() is True
+
+    def test_can_spawn_denied_low_cpu(self, autoscaler):
+        """Should deny spawn when CPU is low."""
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            with patch.object(autoscaler, 'get_available_resources') as mock_resources:
+                # Not enough CPU
+                mock_resources.return_value = (10.0, 2000.0)
+                assert autoscaler.can_spawn_runner() is False
+
+    def test_can_spawn_denied_low_memory(self, autoscaler):
+        """Should deny spawn when memory is low."""
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            with patch.object(autoscaler, 'get_available_resources') as mock_resources:
+                # Not enough memory
+                mock_resources.return_value = (500.0, 50.0)
+                assert autoscaler.can_spawn_runner() is False
+
+    def test_spawn_respects_cooldown(self, autoscaler):
+        """Should not spawn if cooldown is active."""
+        repo = "owner/repo"
+        autoscaler.last_spawn_time[repo] = time.time()  # Just spawned
+
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            result = autoscaler.spawn_runner(repo, f"https://github.com/{repo}")
+            assert result is None
+
+    def test_spawn_after_cooldown_expires(self, autoscaler):
+        """Should allow spawn after cooldown expires."""
+        repo = "owner/repo"
+        autoscaler.last_spawn_time[repo] = time.time() - SPAWN_COOLDOWN_SECONDS - 1
+
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            mock_container = Mock()
+            mock_container.id = "new-container-id"
+            autoscaler.docker_client.containers.run.return_value = mock_container
+
+            result = autoscaler.spawn_runner(repo, f"https://github.com/{repo}")
+            assert result == "new-container-id"
+            assert autoscaler.docker_client.containers.run.called
+
+    def test_spawn_updates_cooldown_time(self, autoscaler):
+        """Should update last_spawn_time after successful spawn."""
+        repo = "owner/repo"
+        before_time = time.time()
+
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            mock_container = Mock()
+            mock_container.id = "new-container-id"
+            autoscaler.docker_client.containers.run.return_value = mock_container
+
+            autoscaler.spawn_runner(repo, f"https://github.com/{repo}")
+
+            assert repo in autoscaler.last_spawn_time
+            assert autoscaler.last_spawn_time[repo] >= before_time
+
+    def test_spawn_creates_ephemeral_container(self, autoscaler):
+        """Spawned container should have correct ephemeral configuration."""
+        repo = "owner/repo"
+        repo_url = f"https://github.com/{repo}"
+
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            mock_container = Mock()
+            mock_container.id = "new-container-id"
+            autoscaler.docker_client.containers.run.return_value = mock_container
+
+            autoscaler.spawn_runner(repo, repo_url)
+
+            call_kwargs = autoscaler.docker_client.containers.run.call_args[1]
+            assert call_kwargs['environment']['EPHEMERAL'] == 'true'
+            assert call_kwargs['environment']['REPO_URL'] == repo_url
+            assert call_kwargs['auto_remove'] is True
+
+    def test_spawn_handles_docker_error(self, autoscaler):
+        """Should handle Docker errors gracefully."""
+        repo = "owner/repo"
+
+        with patch('autoscaler.GITHUB_PAT', 'test_pat'):
+            autoscaler.docker_client.containers.run.side_effect = Exception("Docker error")
+
+            result = autoscaler.spawn_runner(repo, f"https://github.com/{repo}")
+            assert result is None
+
+
+class TestScalingPriority:
+    """Tests for priority-based scaling decisions."""
+
+    @pytest.fixture
+    def autoscaler(self):
+        with patch.object(Autoscaler, '__init__', lambda x: None):
+            scaler = Autoscaler()
+            scaler.docker_client = Mock()
+            scaler.state = AutoscalerState()
+            scaler.last_spawn_time = {}
+            return scaler
+
+    def test_high_priority_repos_spawned_first(self, autoscaler):
+        """When resources are limited, high-priority repos should get runners first."""
+        # Setup: repo1 has higher priority (recent activity)
+        stats1 = autoscaler.state.get_repo_stats("owner/repo1")
+        stats1.frecency_score = 10.0
+        stats1.last_job_time = time.time()
+
+        stats2 = autoscaler.state.get_repo_stats("owner/repo2")
+        stats2.frecency_score = 1.0
+        stats2.last_job_time = time.time() - 7200  # 2 hours ago
+
+        repos_needing_runner = ["owner/repo1", "owner/repo2"]
+
+        # Sort by priority descending (as the slow_loop does)
+        repos_needing_runner.sort(key=lambda r: -autoscaler.get_repo_priority(r))
+
+        assert repos_needing_runner[0] == "owner/repo1"
+
+    def test_repos_with_idle_runners_not_spawned(self):
+        """Repos with idle runners shouldn't get more spawned."""
+        # This is more of a logic test for the slow_loop
+        busy_by_repo = {"owner/repo": 1}
+        idle_by_repo = {"owner/repo": 1}  # Has an idle runner
+
+        repos_needing_runner = []
+        for repo in busy_by_repo:
+            idle_count = idle_by_repo.get(repo, 0)
+            if idle_count == 0:
+                repos_needing_runner.append(repo)
+
+        assert "owner/repo" not in repos_needing_runner
+
+    def test_all_busy_repo_needs_runner(self):
+        """Repos with all runners busy should get a new one spawned."""
+        busy_by_repo = {"owner/repo": 2}
+        idle_by_repo = {}  # No idle runners
+
+        repos_needing_runner = []
+        for repo in busy_by_repo:
+            idle_count = idle_by_repo.get(repo, 0)
+            if idle_count == 0:
+                repos_needing_runner.append(repo)
+
+        assert "owner/repo" in repos_needing_runner

@@ -23,7 +23,8 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import docker
 import psutil
@@ -40,6 +41,14 @@ MEMORY_HEADROOM_PERCENT = int(os.environ.get("MEMORY_HEADROOM_PERCENT", "20"))
 # Scaling config
 MIN_RUNNERS = int(os.environ.get("MIN_RUNNERS", "1"))  # Always keep at least this many running
 IDLE_TIMEOUT_MINUTES = int(os.environ.get("IDLE_TIMEOUT_MINUTES", "10"))
+SPAWN_COOLDOWN_SECONDS = int(os.environ.get("SPAWN_COOLDOWN_SECONDS", "30"))  # Min time between spawns per repo
+
+# Resource estimates for spawning
+RUNNER_CPU_ESTIMATE = 50  # percent CPU for idle runner
+RUNNER_MEMORY_ESTIMATE = 100  # MB for idle runner
+
+# GitHub PAT for spawning new runners
+GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +63,8 @@ class RunnerState:
     """Current state of a runner container."""
     container_id: str
     name: str
-    repo: str
+    repo: str  # owner/repo format
+    repo_url: str  # full GitHub URL for spawning
     status: str  # running, paused, exited
     is_busy: bool  # running a job vs idle
     cpu_percent: float
@@ -120,6 +130,8 @@ class Autoscaler:
         self.docker_client = docker.from_env()
         self.state = AutoscalerState()
         self.load_state()
+        # Track last spawn time per repo to prevent rapid spawning
+        self.last_spawn_time: Dict[str, float] = {}
 
     def load_state(self):
         """Load persistent state from disk."""
@@ -159,20 +171,21 @@ class Autoscaler:
 
             # Determine repo from container env
             repo = None
+            repo_url = None
             try:
                 env = container.attrs.get("Config", {}).get("Env", [])
                 for e in env:
                     if e.startswith("REPO_URL="):
-                        url = e.split("=", 1)[1]
+                        repo_url = e.split("=", 1)[1]
                         # Extract owner/repo from URL
-                        parts = url.rstrip("/").split("/")
+                        parts = repo_url.rstrip("/").split("/")
                         if len(parts) >= 2:
                             repo = f"{parts[-2]}/{parts[-1]}"
                         break
             except Exception:
                 pass
 
-            if not repo:
+            if not repo or not repo_url:
                 continue
 
             status = container.status
@@ -216,6 +229,7 @@ class Autoscaler:
                 container_id=container.id,
                 name=name,
                 repo=repo,
+                repo_url=repo_url,
                 status=status,
                 is_busy=is_busy,
                 cpu_percent=cpu_percent,
@@ -269,6 +283,65 @@ class Autoscaler:
         peak_factor = 1.0 + (stats.peak_concurrent - 1) * 0.1
 
         return frecency * duration_factor * peak_factor
+
+    def can_spawn_runner(self) -> bool:
+        """Check if resources allow spawning another runner."""
+        if not GITHUB_PAT:
+            return False  # Can't spawn without PAT
+
+        available_cpu, available_memory = self.get_available_resources()
+        return (available_cpu > RUNNER_CPU_ESTIMATE and
+                available_memory > RUNNER_MEMORY_ESTIMATE)
+
+    def spawn_runner(self, repo: str, repo_url: str) -> Optional[str]:
+        """
+        Spawn an ephemeral runner for a repo.
+        Returns container ID if successful, None otherwise.
+        """
+        if not GITHUB_PAT:
+            log.warning("Cannot spawn runner: GITHUB_PAT not set")
+            return None
+
+        # Check cooldown
+        last_spawn = self.last_spawn_time.get(repo, 0)
+        if time.time() - last_spawn < SPAWN_COOLDOWN_SECONDS:
+            log.debug(f"Skipping spawn for {repo}: cooldown active")
+            return None
+
+        try:
+            container_name = f"runner-{repo.replace('/', '-')}-{uuid4().hex[:8]}"
+            log.info(f"Spawning ephemeral runner for {repo}: {container_name}")
+
+            container = self.docker_client.containers.run(
+                image="github-runner-cypress:latest",
+                name=container_name,
+                detach=True,
+                auto_remove=True,  # Auto-remove when stopped
+                environment={
+                    "REPO_URL": repo_url,
+                    "RUNNER_SCOPE": "repo",
+                    "ACCESS_TOKEN": GITHUB_PAT,
+                    "RUNNER_NAME_PREFIX": repo.split("/")[-1],
+                    "RANDOM_RUNNER_SUFFIX": "true",
+                    "LABELS": "self-hosted,linux,x64,nelnet,ephemeral",
+                    "RUNNER_WORKDIR": "/tmp/github-runner",
+                    "EPHEMERAL": "true",
+                    "DISABLE_AUTO_UPDATE": "true",
+                },
+                volumes={
+                    "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+                },
+                extra_hosts={"host.docker.internal": "host-gateway"},
+                network="blaha-ci-shared",
+            )
+
+            self.last_spawn_time[repo] = time.time()
+            log.info(f"Spawned runner {container_name} for {repo}")
+            return container.id
+
+        except Exception as e:
+            log.error(f"Failed to spawn runner for {repo}: {e}")
+            return None
 
     async def fast_loop(self):
         """
@@ -363,6 +436,7 @@ class Autoscaler:
         - Parse container logs for job events
         - Update frecency and duration stats
         - Track peak concurrent usage
+        - Dynamic scaling: spawn marginal runners for busy repos
         - Save state to disk
         """
         while True:
@@ -389,15 +463,43 @@ class Autoscaler:
                         log.warning(f"Failed to parse logs for {runner.name}: {e}")
 
                 # Track peak concurrent busy runners per repo
-                busy_by_repo = {}
+                busy_by_repo: Dict[str, int] = {}
+                idle_by_repo: Dict[str, int] = {}
+                repo_urls: Dict[str, str] = {}  # Store repo_url for spawning
+
                 for runner in runners:
                     if runner.is_busy:
                         busy_by_repo[runner.repo] = busy_by_repo.get(runner.repo, 0) + 1
+                    elif runner.status == "running":
+                        idle_by_repo[runner.repo] = idle_by_repo.get(runner.repo, 0) + 1
+                    # Track repo URLs for spawning
+                    if runner.repo not in repo_urls:
+                        repo_urls[runner.repo] = runner.repo_url
 
                 for repo, count in busy_by_repo.items():
                     stats = self.state.get_repo_stats(repo)
                     if count > stats.peak_concurrent:
                         stats.peak_concurrent = count
+
+                # === DYNAMIC SCALING ===
+                # Find repos that need a marginal runner (all busy, no idle)
+                repos_needing_runner = []
+                for repo in busy_by_repo:
+                    idle_count = idle_by_repo.get(repo, 0)
+                    if idle_count == 0 and repo in repo_urls:
+                        repos_needing_runner.append(repo)
+
+                if repos_needing_runner:
+                    # Sort by priority (highest first)
+                    repos_needing_runner.sort(key=lambda r: -self.get_repo_priority(r))
+
+                    # Spawn for highest-priority repos until resources exhausted
+                    for repo in repos_needing_runner:
+                        if self.can_spawn_runner():
+                            self.spawn_runner(repo, repo_urls[repo])
+                        else:
+                            log.info(f"Skipping spawn for {repo}: insufficient resources")
+                            break  # No point checking lower-priority repos
 
                 self.save_state()
 

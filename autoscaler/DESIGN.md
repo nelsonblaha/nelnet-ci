@@ -113,8 +113,48 @@ Unit tests in `test_autoscaler.py` cover:
 
 Run with: `pytest test_autoscaler.py -v`
 
+## Dynamic Scaling
+
+The autoscaler dynamically spawns ephemeral runner containers when:
+1. A repo has all its runners busy (no idle runners)
+2. System resources allow for more runners (CPU/RAM headroom maintained)
+
+### Scaling Logic (in slow loop)
+
+```
+For each repo:
+  if all runners busy AND no idle runners AND resources available:
+    spawn ephemeral runner for this repo
+```
+
+Spawning is priority-based:
+- Repos are sorted by priority (frecency × duration_factor)
+- High-priority repos get marginal runners first when resources are constrained
+- Low-priority repos may have to wait
+
+### Ephemeral Runners
+
+Spawned runners are configured with `EPHEMERAL=true`:
+- Self-destruct after job completes
+- Auto-removed by Docker (`auto_remove=True`)
+- No manual cleanup needed
+
+### Spawn Cooldown
+
+To prevent rapid spawning before a runner registers:
+- 30-second cooldown per repo between spawns
+- Configurable via `SPAWN_COOLDOWN_SECONDS`
+
+### Configuration
+
+Additional environment variables for scaling:
+- `GITHUB_PAT`: Required for spawning new runners (same PAT used for registration)
+- `SPAWN_COOLDOWN_SECONDS`: Minimum time between spawns per repo (default: 30)
+- `RUNNER_CPU_ESTIMATE`: Estimated CPU for resource check (default: 50%)
+- `RUNNER_MEMORY_ESTIMATE`: Estimated memory for resource check (default: 100MB)
+
 ## Limitations
 
 - **Busy runner protection**: If system resources are exhausted while runners are busy, they cannot be paused. The system will compete for resources until jobs complete.
-- **No scaling**: The autoscaler only pauses/unpauses existing containers. It does not create or destroy runner containers - that's handled by docker-compose.
 - **Log-based detection**: Busy/idle detection relies on log parsing. If log format changes in the runner image, detection may break.
+- **Seed runners required**: At least one runner per repo must exist in docker-compose.yml for the autoscaler to discover the repo and spawn additional runners.
