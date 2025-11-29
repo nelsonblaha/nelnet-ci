@@ -141,7 +141,7 @@ class Autoscaler:
         except Exception as e:
             log.warning(f"Failed to save state: {e}")
 
-    def get_runner_containers(self) -> list[RunnerState]:
+    def get_runner_containers(self) -> List[RunnerState]:
         """Get all runner containers with their current state."""
         runners = []
 
@@ -224,7 +224,7 @@ class Autoscaler:
 
         return runners
 
-    def get_available_resources(self) -> tuple[float, float]:
+    def get_available_resources(self) -> Tuple[float, float]:
         """
         Calculate available CPU and memory for runners.
         Returns (available_cpu_percent, available_memory_mb)
