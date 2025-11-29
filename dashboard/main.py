@@ -430,7 +430,7 @@ async def list_repos(_: bool = Depends(verify_admin)):
     autoscaler_stats = {}
     try:
         import json
-        with open("/data/autoscaler.json") as f:
+        with open("/autoscaler-data/autoscaler.json") as f:
             data = json.load(f)
             autoscaler_stats = data.get("repo_stats", {})
     except Exception:
