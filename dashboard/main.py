@@ -373,15 +373,42 @@ class ScalingConfig(BaseModel):
 
 
 # Auth
-async def verify_admin(request: Request):
+def is_admin_user(request: Request) -> bool:
+    """Check if request is from an admin user (via X-Remote-User header)."""
+    remote_user = request.headers.get("X-Remote-User", "")
+    return remote_user in ADMIN_USERS if remote_user else False
+
+
+def has_admin_password(request: Request) -> bool:
+    """Check if request has valid admin password."""
     if not ADMIN_PASSWORD:
-        return True  # No password configured, allow access
+        return True  # No password configured
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        token = auth[7:]
-        if token == ADMIN_PASSWORD:
-            return True
-    raise HTTPException(status_code=401, detail="Unauthorized")
+    if auth.startswith("Bearer ") and auth[7:] == ADMIN_PASSWORD:
+        return True
+    return False
+
+
+async def verify_admin(request: Request):
+    """Verify admin access for write operations - requires BOTH admin user AND password (if set)."""
+    # Must be an admin user from Homepage
+    if not is_admin_user(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    # Must also have password if one is configured
+    if not has_admin_password(request):
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    return True
+
+
+async def verify_read_access(request: Request):
+    """Verify read access - any authenticated Homepage user can view."""
+    remote_user = request.headers.get("X-Remote-User", "")
+    if remote_user:
+        return True  # Any Homepage user can read
+    # Fall back to password check for direct API access
+    if has_admin_password(request):
+        return True
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 
 # App setup
@@ -417,7 +444,7 @@ async def get_status():
 
 
 @app.get("/api/repos")
-async def list_repos(_: bool = Depends(verify_admin)):
+async def list_repos(_: bool = Depends(verify_read_access)):
     """List all configured repositories."""
     async with get_db() as db:
         cursor = await db.execute("SELECT * FROM repos ORDER BY owner, name")
@@ -480,7 +507,7 @@ async def remove_repo(owner: str, name: str, _: bool = Depends(verify_admin)):
 
 
 @app.get("/api/approved-users")
-async def list_approved_users(_: bool = Depends(verify_admin)):
+async def list_approved_users(_: bool = Depends(verify_read_access)):
     """List approved GitHub users."""
     async with get_db() as db:
         cursor = await db.execute("SELECT * FROM approved_users ORDER BY github_username")
@@ -538,7 +565,7 @@ async def get_user_info(request: Request):
 
 
 @app.get("/api/config")
-async def get_config(_: bool = Depends(verify_admin)):
+async def get_config(_: bool = Depends(verify_read_access)):
     """Get current configuration."""
     async with get_db() as db:
         cursor = await db.execute("SELECT key, value FROM config")
