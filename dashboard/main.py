@@ -170,15 +170,26 @@ def get_runner_containers() -> list:
                                 runner_info["repo"] = f"{parts[-2]}/{parts[-1]}"
 
                     # Check docker logs for job status (more reliable than internal log files)
-                    log_content = c.logs(tail=50).decode()
-                    if "Running job:" in log_content:
-                        # Extract job name - find the last "Running job:" line
-                        for line in reversed(log_content.split('\n')):
-                            if "Running job:" in line:
-                                runner_info["job"] = line.split("Running job:")[-1].strip()
-                                break
-                    elif "Listening for Jobs" in log_content:
+                    log_content = c.logs(tail=100).decode()
+                    lines = log_content.split('\n')
+
+                    # Find the last occurrence of each state indicator
+                    last_running_idx = -1
+                    last_listening_idx = -1
+                    last_job_name = None
+
+                    for idx, line in enumerate(lines):
+                        if "Running job:" in line:
+                            last_running_idx = idx
+                            last_job_name = line.split("Running job:")[-1].strip()
+                        elif "Listening for Jobs" in line:
+                            last_listening_idx = idx
+
+                    # Determine current state based on which message came last
+                    if last_listening_idx > last_running_idx:
                         runner_info["job"] = "idle"
+                    elif last_job_name:
+                        runner_info["job"] = last_job_name
                 except Exception:
                     pass
 
@@ -490,12 +501,12 @@ async def dashboard():
                             <div class="bg-gray-700/50 rounded p-2">
                                 <div class="flex items-center gap-2">
                                     <span class="inline-block w-2 h-2 rounded-full"
-                                          :class="r.health === 'healthy' ? 'bg-green-400' : 'bg-yellow-400'"></span>
+                                          :class="r.status !== 'running' ? 'bg-red-400' : (r.job && r.job !== 'idle') ? 'bg-green-400' : 'bg-yellow-400'"></span>
                                     <span class="text-sm font-medium" x-text="r.name.replace('github-runners-', '')"></span>
                                 </div>
                                 <div class="text-xs text-gray-400 mt-1 ml-4">
                                     <span x-show="r.repo" x-text="r.repo"></span>
-                                    <span x-show="r.job && r.job !== 'idle'" class="text-yellow-400">
+                                    <span x-show="r.job && r.job !== 'idle'" class="text-green-400">
                                         → <span x-text="r.job"></span>
                                     </span>
                                     <span x-show="r.job === 'idle'" class="text-gray-500">idle</span>
