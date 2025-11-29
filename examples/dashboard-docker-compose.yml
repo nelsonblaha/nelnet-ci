@@ -1,0 +1,52 @@
+# CI Dashboard
+# Web UI showing runner status and workflow jobs
+#
+# Features:
+# - Real-time runner status (idle/busy/paused)
+# - Current jobs per repo
+# - Plex awareness (optional - shows transcode activity)
+#
+# Access at http://localhost:8101 or configure reverse proxy
+
+services:
+  dashboard:
+    build:
+      context: ../dashboard
+    container_name: ci-dashboard
+    restart: unless-stopped
+    ports:
+      - "8101:8000"
+    environment:
+      - DATABASE_PATH=/data/ci.db
+
+      # GitHub token for fetching workflow info
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+      # Optional: Plex integration (shows transcode activity)
+      # - PLEX_URL=http://host.docker.internal:32400
+      # - PLEX_TOKEN=${PLEX_TOKEN}
+
+      # Optional: Reverse proxy configuration
+      # - VIRTUAL_HOST=ci.example.com
+      # - VIRTUAL_PORT=8000
+      # - LETSENCRYPT_HOST=ci.example.com
+
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - ci-net
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ci-net:
+    external: true

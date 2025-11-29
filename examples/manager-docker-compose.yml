@@ -1,0 +1,68 @@
+# GitHub Actions Runner with Autoscaler
+# Runs both a runner and the autoscaler that manages all runners
+#
+# This container should be run once per server. It:
+# 1. Runs a GitHub Actions runner for the nelnet-ci repo itself
+# 2. Runs the autoscaler that pauses/unpauses idle runners across all repos
+#
+# The autoscaler monitors system resources and pauses idle runners when
+# CPU/memory is needed for other workloads.
+
+services:
+  manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.manager
+    restart: unless-stopped
+    environment:
+      # This runner handles the CI infrastructure repo itself
+      - REPO_URL=https://github.com/YOUR_USERNAME/YOUR_CI_REPO
+      - RUNNER_SCOPE=repo
+      - ACCESS_TOKEN=${GITHUB_PAT}
+      - RUNNER_NAME_PREFIX=ci-manager
+      - RANDOM_RUNNER_SUFFIX=true
+      - LABELS=self-hosted,linux,x64
+      - RUNNER_WORKDIR=/tmp/github-runner
+      - EPHEMERAL=true
+      - DISABLE_AUTO_UPDATE=true
+
+      # Autoscaler configuration
+      - CPU_HEADROOM_PERCENT=20      # Reserve 20% CPU for other services
+      - MEMORY_HEADROOM_PERCENT=20   # Reserve 20% memory for other services
+      - MIN_RUNNERS=1                # Always keep at least 1 runner running
+      - STATS_FILE=/data/autoscaler.json
+
+    volumes:
+      # Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Runner data
+      - manager-runner-data:/home/runner
+
+      # Autoscaler stats persistence
+      - autoscaler-data:/data
+
+      # Optional: Mount CI infrastructure for self-deploy
+      # - /path/to/ci-repo:/path/to/ci-repo
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - default
+      - ci-shared
+
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "Runner.Listener"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  manager-runner-data:
+  autoscaler-data:
+
+networks:
+  ci-shared:
+    external: true

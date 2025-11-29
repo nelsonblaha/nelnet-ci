@@ -1,0 +1,77 @@
+# GitHub Actions Self-Hosted Runner
+# Template configuration - customize for your repo
+#
+# Setup:
+# 1. Create a GitHub PAT with 'repo' scope at https://github.com/settings/tokens
+# 2. Copy this file and .env.example to your runner directory
+# 3. Edit .env with your token
+# 4. docker-compose up -d
+#
+# Scale runners:
+#   docker-compose up -d --scale runner=3
+
+services:
+  runner:
+    # Use the pre-built Cypress runner image, or build your own
+    # image: github-runner-cypress:latest
+    build:
+      context: ../runner-image
+    restart: unless-stopped
+    environment:
+      # Your repo URL
+      - REPO_URL=https://github.com/YOUR_USERNAME/YOUR_REPO
+      - RUNNER_SCOPE=repo
+
+      # For org-level runners (covers all repos):
+      # - ORG_NAME=your_org
+      # - RUNNER_SCOPE=org
+
+      # Authentication
+      - ACCESS_TOKEN=${GITHUB_PAT}
+
+      # Runner naming
+      - RUNNER_NAME_PREFIX=my-runner
+      - RANDOM_RUNNER_SUFFIX=true
+
+      # Labels for targeting (used in workflow: runs-on: [self-hosted, my-label])
+      - LABELS=self-hosted,linux,x64
+
+      # Work directory
+      - RUNNER_WORKDIR=/tmp/github-runner
+
+      # Ephemeral mode - runner restarts fresh after each job
+      - EPHEMERAL=true
+
+      # Disable automatic updates
+      - DISABLE_AUTO_UPDATE=true
+
+    volumes:
+      # Docker-in-docker support
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Persist runner data
+      - runner-data:/home/runner
+
+      # Optional: Mount directories for deployments
+      # - /path/to/deploy:/path/to/deploy
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - default
+      - ci-shared
+
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "Runner.Listener"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  runner-data:
+
+networks:
+  ci-shared:
+    external: true
