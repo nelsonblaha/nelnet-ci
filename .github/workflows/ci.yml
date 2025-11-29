@@ -60,4 +60,5 @@ jobs:
       - name: Restart manager to pick up autoscaler changes
         run: |
           # Manager's entrypoint copies autoscaler from mounted nelnet-ci repo
-          docker restart github-runners-nelnet-ci-manager-1 || true
+          # Run in background with delay so runner can finish this job first
+          nohup bash -c 'sleep 5 && docker restart github-runners-nelnet-ci-manager-1' &>/dev/null &
