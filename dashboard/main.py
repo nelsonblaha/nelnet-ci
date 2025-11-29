@@ -650,11 +650,8 @@ async def dashboard():
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
                                           x-text="getStatusText(repo.ci_status)"></span>
                                 </a>
-                                <div class="flex items-center gap-1 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0) + ' / peak: ' + (repo.peak_concurrent || 1)">
-                                    <div class="w-16 bg-gray-700 rounded-full h-1.5">
-                                        <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + Math.min(100, (repo.frecency || 0) / (maxFrecency || 1) * 100) + '%'"></div>
-                                    </div>
-                                    <span class="text-xs text-gray-500" x-text="'×' + (repo.peak_concurrent || 1)"></span>
+                                <div class="w-16 bg-gray-700 rounded-full h-1.5 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0)">
+                                    <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + Math.min(100, (repo.frecency || 0) / (maxFrecency || 1) * 100) + '%'"></div>
                                 </div>
                             </div>
                             <div class="flex items-center gap-3">
