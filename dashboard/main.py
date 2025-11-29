@@ -233,7 +233,7 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
 
 
 async def get_workflow_jobs(owner: str, repo: str) -> list:
-    """Get currently running or recent workflow jobs for a repo."""
+    """Get jobs only from in-progress workflow runs."""
     headers = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
@@ -241,10 +241,10 @@ async def get_workflow_jobs(owner: str, repo: str) -> list:
     jobs = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Get recent workflow runs (in_progress or queued first, then recent completed)
+            # Only get in-progress runs
             resp = await client.get(
                 f"https://api.github.com/repos/{owner}/{repo}/actions/runs",
-                params={"per_page": 5},
+                params={"per_page": 5, "status": "in_progress"},
                 headers=headers
             )
             if resp.status_code != 200:
@@ -252,7 +252,6 @@ async def get_workflow_jobs(owner: str, repo: str) -> list:
 
             runs = resp.json().get("workflow_runs", [])
             for run in runs:
-                # Get jobs for this run
                 jobs_resp = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run['id']}/jobs",
                     headers=headers
@@ -264,14 +263,9 @@ async def get_workflow_jobs(owner: str, repo: str) -> list:
                             "name": job.get("name"),
                             "status": job.get("status"),
                             "conclusion": job.get("conclusion"),
-                            "started_at": job.get("started_at"),
-                            "completed_at": job.get("completed_at"),
                             "run_url": run.get("html_url"),
                             "runner_name": job.get("runner_name"),
                         })
-                # Only show jobs from runs that are in progress, or the most recent completed
-                if run.get("status") == "completed":
-                    break
     except Exception:
         pass
     return jobs
@@ -598,9 +592,6 @@ async def dashboard():
                                     <span x-show="job.runner_name" class="text-xs text-gray-600" x-text="'on ' + job.runner_name"></span>
                                 </div>
                             </template>
-                        </div>
-                        <div x-show="!repo.jobs || repo.jobs.length === 0" class="ml-6 mt-2 text-sm text-gray-500">
-                            No recent jobs
                         </div>
                     </div>
                 </template>
