@@ -487,10 +487,11 @@ class Autoscaler:
                                     if job_time > stats.last_job_time:
                                         stats.last_job_time = job_time
 
-                                    # Debounce frecency: only count once per 60s per repo
+                                    # Debounce frecency: only count once per 30s per repo
                                     # Uses job timestamp so historical logs are counted correctly
+                                    # 30s is enough to lump parallel matrix jobs together
                                     last_freq = self.last_frecency_time.get(runner.repo, 0)
-                                    if job_time - last_freq > 60:
+                                    if job_time - last_freq > 30:
                                         stats.frecency_score += 1.0
                                         self.last_frecency_time[runner.repo] = job_time
                                         log.info(f"Frecency +1 for {runner.repo}: {line.strip()}")
