@@ -655,6 +655,7 @@ async def dashboard():
                                                   runner.job && runner.job !== 'idle' ? 'bg-yellow-400 animate-pulse' :
                                                   'bg-green-400'"></span>
                                     <span class="text-gray-300" x-text="runner.name.replace('github-runners-', '').replace('-1', '')"></span>
+                                    <span x-show="runner.name.startsWith('runner-')" class="text-xs text-purple-400">(ephemeral)</span>
                                     <span class="text-xs text-gray-500"
                                           x-text="runner.health !== 'healthy' ? runner.health :
                                                   runner.job && runner.job !== 'idle' ? runner.job : 'idle'"></span>
