@@ -232,6 +232,51 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+async def get_workflow_jobs(owner: str, repo: str) -> list:
+    """Get currently running or recent workflow jobs for a repo."""
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
+    jobs = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Get recent workflow runs (in_progress or queued first, then recent completed)
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/actions/runs",
+                params={"per_page": 5},
+                headers=headers
+            )
+            if resp.status_code != 200:
+                return jobs
+
+            runs = resp.json().get("workflow_runs", [])
+            for run in runs:
+                # Get jobs for this run
+                jobs_resp = await client.get(
+                    f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run['id']}/jobs",
+                    headers=headers
+                )
+                if jobs_resp.status_code == 200:
+                    run_jobs = jobs_resp.json().get("jobs", [])
+                    for job in run_jobs:
+                        jobs.append({
+                            "name": job.get("name"),
+                            "status": job.get("status"),
+                            "conclusion": job.get("conclusion"),
+                            "started_at": job.get("started_at"),
+                            "completed_at": job.get("completed_at"),
+                            "run_url": run.get("html_url"),
+                            "runner_name": job.get("runner_name"),
+                        })
+                # Only show jobs from runs that are in progress, or the most recent completed
+                if run.get("status") == "completed":
+                    break
+    except Exception:
+        pass
+    return jobs
+
+
 async def check_user_approved(username: str) -> bool:
     """Check if a GitHub user is in the approved list."""
     async with get_db() as db:
@@ -311,10 +356,18 @@ async def list_repos(_: bool = Depends(verify_admin)):
         rows = await cursor.fetchall()
         repos = [dict(row) for row in rows]
 
-    # Fetch CI status for each repo
-    for repo in repos:
-        status = await get_workflow_status(repo["owner"], repo["name"])
+    # Fetch CI status and jobs for each repo concurrently
+    import asyncio
+
+    async def fetch_repo_data(repo):
+        status, jobs = await asyncio.gather(
+            get_workflow_status(repo["owner"], repo["name"]),
+            get_workflow_jobs(repo["owner"], repo["name"])
+        )
         repo["ci_status"] = status
+        repo["jobs"] = jobs
+
+    await asyncio.gather(*[fetch_repo_data(repo) for repo in repos])
 
     return repos
 
@@ -455,7 +508,7 @@ async def dashboard():
         <h1 class="text-3xl font-bold mb-8">Nelnet CI Dashboard</h1>
 
         <!-- System Status -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
             <div class="bg-gray-800 rounded-lg p-4">
                 <h2 class="text-lg font-semibold mb-2">System</h2>
                 <div x-show="status.system">
@@ -496,102 +549,58 @@ async def dashboard():
                     <p x-show="status.plex?.error" class="text-red-400" x-text="status.plex?.error"></p>
                 </div>
             </div>
-
-            <div class="bg-gray-800 rounded-lg p-4">
-                <h2 class="text-lg font-semibold mb-2">Runners</h2>
-                <div x-show="status.runners">
-                    <div class="space-y-2">
-                        <template x-for="r in status.runners?.containers" :key="r.id">
-                            <div class="bg-gray-700/50 rounded p-2">
-                                <div class="flex items-center gap-2">
-                                    <span class="inline-block w-2 h-2 rounded-full"
-                                          :class="r.status !== 'running' ? 'bg-red-400' : (r.job && r.job !== 'idle') ? 'bg-green-400' : 'bg-yellow-400'"></span>
-                                    <span class="text-sm font-medium" x-text="r.name.replace('github-runners-', '')"></span>
-                                </div>
-                                <div class="text-xs text-gray-400 mt-1 ml-4">
-                                    <span x-show="r.repo" x-text="r.repo"></span>
-                                    <span x-show="r.job && r.job !== 'idle'" class="text-green-400">
-                                        → <span x-text="r.job"></span>
-                                    </span>
-                                    <span x-show="r.job === 'idle'" class="text-gray-500">idle</span>
-                                    <span x-show="!r.job && r.status !== 'running'" class="text-gray-500" x-text="r.status"></span>
-                                </div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <!-- Repos -->
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-semibold">Configured Repositories</h2>
+                <h2 class="text-lg font-semibold">Repositories</h2>
                 <span class="text-xs text-gray-500 hidden sm:inline">Auto-refreshes every minute</span>
             </div>
 
-            <!-- Desktop table (hidden on mobile) -->
-            <table class="w-full hidden md:table">
-                <thead>
-                    <tr class="text-left border-b border-gray-700">
-                        <th class="pb-2">Repository</th>
-                        <th class="pb-2">CI Status</th>
-                        <th class="pb-2">Badge</th>
-                        <th class="pb-2">PR Tests</th>
-                        <th class="pb-2">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <template x-for="repo in repos" :key="repo.id">
-                        <tr class="border-b border-gray-700">
-                            <td class="py-2">
+            <!-- Repo cards with nested jobs -->
+            <div class="space-y-4">
+                <template x-for="repo in repos" :key="repo.id">
+                    <div class="bg-gray-700/50 rounded-lg p-4">
+                        <!-- Repo header -->
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-3">
+                                <span class="inline-block w-3 h-3 rounded-full"
+                                      :class="getStatusDotClass(repo.ci_status)"></span>
                                 <a :href="'https://github.com/' + repo.owner + '/' + repo.name"
-                                   target="_blank" class="text-blue-400 hover:underline"
+                                   target="_blank" class="text-blue-400 hover:underline font-medium"
                                    x-text="repo.owner + '/' + repo.name"></a>
-                            </td>
-                            <td class="py-2">
-                                <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-2">
-                                    <span class="inline-block w-3 h-3 rounded-full"
-                                          :class="getStatusDotClass(repo.ci_status)"></span>
-                                    <span :class="getStatusClass(repo.ci_status)"
+                                <a :href="repo.ci_status?.url" target="_blank">
+                                    <span class="text-sm" :class="getStatusClass(repo.ci_status)"
                                           x-text="getStatusText(repo.ci_status)"></span>
                                 </a>
-                            </td>
-                            <td class="py-2">
-                                <img :src="'https://img.shields.io/endpoint?url=' + encodeURIComponent(window.location.origin + '/api/repos/' + repo.owner + '/' + repo.name + '/badge')"
-                                     alt="CI Badge" class="h-5">
-                            </td>
-                            <td class="py-2">
-                                <span :class="repo.allow_pr_tests ? 'text-yellow-400' : 'text-green-400'"
-                                      x-text="repo.allow_pr_tests ? 'Enabled (risky!)' : 'Disabled'"></span>
-                            </td>
-                            <td class="py-2">
-                                <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300">Remove</button>
-                            </td>
-                        </tr>
-                    </template>
-                </tbody>
-            </table>
-
-            <!-- Mobile card layout (hidden on desktop) -->
-            <div class="md:hidden space-y-3">
-                <template x-for="repo in repos" :key="repo.id">
-                    <div class="bg-gray-700/50 rounded-lg p-3">
-                        <div class="flex items-center justify-between mb-2">
-                            <a :href="'https://github.com/' + repo.owner + '/' + repo.name"
-                               target="_blank" class="text-blue-400 hover:underline font-medium text-sm"
-                               x-text="repo.owner + '/' + repo.name"></a>
-                            <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300 text-sm px-2">&times;</button>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
+                                <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300 text-sm">&times;</button>
+                            </div>
                         </div>
-                        <div class="flex items-center justify-between">
-                            <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-2">
-                                <span class="inline-block w-2 h-2 rounded-full"
-                                      :class="getStatusDotClass(repo.ci_status)"></span>
-                                <span class="text-sm" :class="getStatusClass(repo.ci_status)"
-                                      x-text="getStatusText(repo.ci_status)"></span>
-                            </a>
-                            <span class="text-xs" :class="repo.allow_pr_tests ? 'text-yellow-400' : 'text-gray-500'"
-                                  x-text="repo.allow_pr_tests ? 'PR tests on' : ''"></span>
+
+                        <!-- Jobs list -->
+                        <div x-show="repo.jobs && repo.jobs.length > 0" class="ml-6 mt-3 space-y-1">
+                            <template x-for="job in repo.jobs" :key="job.name + job.started_at">
+                                <div class="flex items-center gap-2 text-sm">
+                                    <span class="inline-block w-2 h-2 rounded-full"
+                                          :class="job.conclusion === 'success' ? 'bg-green-400' :
+                                                  job.conclusion === 'failure' ? 'bg-red-400' :
+                                                  job.status === 'in_progress' ? 'bg-yellow-400 animate-pulse' :
+                                                  job.status === 'queued' ? 'bg-gray-400 animate-pulse' : 'bg-gray-400'"></span>
+                                    <a :href="job.run_url" target="_blank" class="text-gray-300 hover:text-white" x-text="job.name"></a>
+                                    <span class="text-xs text-gray-500"
+                                          x-text="job.status === 'in_progress' ? 'running' :
+                                                  job.status === 'queued' ? 'queued' :
+                                                  job.conclusion || job.status"></span>
+                                    <span x-show="job.runner_name" class="text-xs text-gray-600" x-text="'on ' + job.runner_name"></span>
+                                </div>
+                            </template>
+                        </div>
+                        <div x-show="!repo.jobs || repo.jobs.length === 0" class="ml-6 mt-2 text-sm text-gray-500">
+                            No recent jobs
                         </div>
                     </div>
                 </template>
