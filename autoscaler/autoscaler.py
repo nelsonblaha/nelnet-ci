@@ -492,9 +492,15 @@ class Autoscaler:
                                     # 30s is enough to lump parallel matrix jobs together
                                     last_freq = self.last_frecency_time.get(runner.repo, 0)
                                     if job_time - last_freq > 30:
+                                        # Apply decay before adding new point (half-life 1 hour)
+                                        # This ensures recent activity outweighs old bursts
+                                        if last_freq > 0:
+                                            time_elapsed = job_time - last_freq
+                                            decay = 0.5 ** (time_elapsed / 3600)
+                                            stats.frecency_score *= decay
                                         stats.frecency_score += 1.0
                                         self.last_frecency_time[runner.repo] = job_time
-                                        log.info(f"Frecency +1 for {runner.repo}: {line.strip()}")
+                                        log.info(f"Frecency +1 for {runner.repo} (now {stats.frecency_score:.1f}): {line.strip()}")
 
                     except Exception as e:
                         log.warning(f"Failed to parse logs for {runner.name}: {e}")
