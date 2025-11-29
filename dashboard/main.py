@@ -208,11 +208,16 @@ def get_runner_containers() -> list:
         )
         # Exclude manager container
         if is_runner and "manager" not in name_lower:
+            # Determine health - use container status if no health check configured
+            health_status = c.attrs.get("State", {}).get("Health", {}).get("Status")
+            if not health_status:
+                health_status = "healthy" if c.status == "running" else c.status
+
             runner_info = {
                 "id": c.short_id,
                 "name": c.name,
                 "status": c.status,
-                "health": c.attrs.get("State", {}).get("Health", {}).get("Status", "unknown"),
+                "health": health_status,
                 "job": None,
                 "repo": None,
             }
@@ -725,8 +730,8 @@ async def dashboard():
 
             async init() {
                 await this.refresh();
-                setInterval(() => this.loadStatus(), 10000);
-                setInterval(() => this.loadRepos(), 60000);  // Refresh repos every minute
+                setInterval(() => this.loadStatus(), 10000);  // System status every 10s
+                setInterval(() => this.loadRepos(), 10000);   // Repos & runners every 10s
                 setInterval(() => this.updateReposAge(), 1000);  // Update age display every second
             },
 
