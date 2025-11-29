@@ -45,8 +45,11 @@ jobs:
         run: |
           cd /home/ben/src/nelnet-ci
           git config --global --add safe.directory /home/ben/src/nelnet-ci
+          # Use HTTPS for fetch (runner lacks SSH keys), then restore SSH remote
+          git remote set-url origin https://github.com/nelsonblaha/nelnet-ci.git
           git fetch origin
           git reset --hard origin/master
+          git remote set-url origin git@github.com:nelsonblaha/nelnet-ci.git
           cd dashboard
           docker compose down
           docker compose up -d --build
