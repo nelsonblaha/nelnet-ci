@@ -605,7 +605,7 @@ async def dashboard():
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-semibold">Repositories</h2>
-                <span class="text-xs text-gray-500 hidden sm:inline">Auto-refreshes every minute</span>
+                <span class="text-xs text-gray-500 hidden sm:inline">Updated <span x-text="reposAgeSeconds"></span>s ago</span>
             </div>
 
             <!-- Repo cards with nested jobs -->
@@ -713,11 +713,20 @@ async def dashboard():
             newRepo: { owner: '', name: '', allow_pr_tests: false },
             newUsername: '',
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
+            lastReposUpdate: null,
+            reposAgeSeconds: 0,
 
             async init() {
                 await this.refresh();
                 setInterval(() => this.loadStatus(), 10000);
                 setInterval(() => this.loadRepos(), 60000);  // Refresh repos every minute
+                setInterval(() => this.updateReposAge(), 1000);  // Update age display every second
+            },
+
+            updateReposAge() {
+                if (this.lastReposUpdate) {
+                    this.reposAgeSeconds = Math.floor((Date.now() - this.lastReposUpdate) / 1000);
+                }
             },
 
             async refresh() {
@@ -731,7 +740,11 @@ async def dashboard():
 
             async loadRepos() {
                 const resp = await fetch('/api/repos', { headers: this.authHeader });
-                if (resp.ok) this.repos = await resp.json();
+                if (resp.ok) {
+                    this.repos = await resp.json();
+                    this.lastReposUpdate = Date.now();
+                    this.reposAgeSeconds = 0;
+                }
             },
 
             async loadUsers() {
