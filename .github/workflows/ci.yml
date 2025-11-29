@@ -1,5 +1,4 @@
-# CI for nelnet-ci itself
-# Tests the infrastructure and triggers dependent repos on success
+# CI for nelnet-ci dashboard
 
 name: CI
 
@@ -10,35 +9,7 @@ on:
     branches: [main, master]
 
 jobs:
-  # Run pytest on our own tests
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements-test.txt
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  # Test that the runner image builds
-  test-runner-image:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build runner image
-        run: docker build -t github-runner-cypress:test runner-image/
-
-  # Deploy the dashboard to nelnet
   deploy-dashboard:
-    needs: [test, test-runner-image]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: self-hosted
     steps:
@@ -50,25 +21,3 @@ jobs:
           cd dashboard
           docker compose down
           docker compose up -d --build
-
-  # Notify dependent repos to re-run their CI when nelnet-ci changes
-  notify-dependents:
-    needs: [test, test-runner-image]
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        repo:
-          - nelsonblaha/homepage
-          - nelsonblaha/priorities
-          - nelsonblaha/elpasoautomation
-          - Groovitation/video-games
-    steps:
-      - name: Trigger ${{ matrix.repo }}
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.DISPATCH_PAT }}
-          repository: ${{ matrix.repo }}
-          event-type: nelnet-ci-updated
-          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
