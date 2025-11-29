@@ -525,6 +525,22 @@ class Autoscaler:
                             continue
                         break  # Resource exhausted, stop spawning
 
+                # === CLEANUP STALE EPHEMERAL RUNNERS ===
+                # Remove idle ephemeral runners that have been idle too long
+                # (They should auto-exit after a job, but if they never got one, clean them up)
+                for runner in runners:
+                    if not runner.is_busy and runner.name.startswith("runner-"):
+                        # This is an idle ephemeral runner - check if there's already
+                        # a dedicated runner idle for this repo
+                        repo_idle = idle_by_repo.get(runner.repo, 0)
+                        if repo_idle > 1:  # More than one idle runner for this repo
+                            try:
+                                container = self.docker_client.containers.get(runner.container_id)
+                                log.info(f"Removing excess idle ephemeral runner: {runner.name}")
+                                container.stop()
+                            except Exception as e:
+                                log.warning(f"Failed to stop {runner.name}: {e}")
+
                 self.save_state()
 
                 log.info(
