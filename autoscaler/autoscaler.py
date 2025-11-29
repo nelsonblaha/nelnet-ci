@@ -14,6 +14,8 @@ Priority-based decisions:
 - Busy runners are never paused
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -21,6 +23,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List, Tuple
 
 import docker
 import psutil
