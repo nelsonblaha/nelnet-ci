@@ -35,13 +35,13 @@ jobs:
       - name: Build runner image
         run: docker build -t github-runner-cypress:test runner-image/
 
-  # Deploy the dashboard to nelnet
-  deploy-dashboard:
+  # Deploy dashboard and manager to nelnet
+  deploy:
     needs: [test, test-runner-image]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: self-hosted
     steps:
-      - name: Deploy dashboard
+      - name: Pull latest code
         run: |
           cd /home/ben/src/nelnet-ci
           git config --global --add safe.directory /home/ben/src/nelnet-ci
@@ -50,6 +50,19 @@ jobs:
           git fetch origin
           git reset --hard origin/master
           git remote set-url origin git@github.com:nelsonblaha/nelnet-ci.git
-          cd dashboard
+
+      - name: Deploy dashboard
+        run: |
+          cd /home/ben/src/nelnet-ci/dashboard
           docker compose down
           docker compose up -d --build
+
+      - name: Copy autoscaler to runners directory
+        run: |
+          cp /home/ben/src/nelnet-ci/autoscaler/autoscaler.py /home/ben/github-runners/autoscaler.py
+
+      - name: Rebuild and restart manager with autoscaler
+        run: |
+          cd /home/ben/github-runners
+          docker compose build nelnet-ci-manager
+          docker compose up -d nelnet-ci-manager
