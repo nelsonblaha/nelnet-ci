@@ -485,7 +485,6 @@ async def dashboard():
             <div class="bg-gray-800 rounded-lg p-4">
                 <h2 class="text-lg font-semibold mb-2">Runners</h2>
                 <div x-show="status.runners">
-                    <p class="mb-2">Active: <span x-text="status.runners?.healthy + '/' + status.runners?.count"></span></p>
                     <div class="space-y-2">
                         <template x-for="r in status.runners?.containers" :key="r.id">
                             <div class="bg-gray-700/50 rounded p-2">
@@ -513,9 +512,11 @@ async def dashboard():
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-semibold">Configured Repositories</h2>
-                <span class="text-xs text-gray-500">Auto-refreshes every minute</span>
+                <span class="text-xs text-gray-500 hidden sm:inline">Auto-refreshes every minute</span>
             </div>
-            <table class="w-full">
+
+            <!-- Desktop table (hidden on mobile) -->
+            <table class="w-full hidden md:table">
                 <thead>
                     <tr class="text-left border-b border-gray-700">
                         <th class="pb-2">Repository</th>
@@ -557,34 +558,60 @@ async def dashboard():
                 </tbody>
             </table>
 
+            <!-- Mobile card layout (hidden on desktop) -->
+            <div class="md:hidden space-y-3">
+                <template x-for="repo in repos" :key="repo.id">
+                    <div class="bg-gray-700/50 rounded-lg p-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <a :href="'https://github.com/' + repo.owner + '/' + repo.name"
+                               target="_blank" class="text-blue-400 hover:underline font-medium text-sm"
+                               x-text="repo.owner + '/' + repo.name"></a>
+                            <button @click="removeRepo(repo)" class="text-red-400 hover:text-red-300 text-sm px-2">&times;</button>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-2">
+                                <span class="inline-block w-2 h-2 rounded-full"
+                                      :class="getStatusDotClass(repo.ci_status)"></span>
+                                <span class="text-sm" :class="getStatusClass(repo.ci_status)"
+                                      x-text="getStatusText(repo.ci_status)"></span>
+                            </a>
+                            <span class="text-xs" :class="repo.allow_pr_tests ? 'text-yellow-400' : 'text-gray-500'"
+                                  x-text="repo.allow_pr_tests ? 'PR tests on' : ''"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
             <!-- Add repo form -->
-            <div class="mt-4 flex gap-2">
-                <input x-model="newRepo.owner" placeholder="owner" class="bg-gray-700 px-2 py-1 rounded">
-                <input x-model="newRepo.name" placeholder="repo" class="bg-gray-700 px-2 py-1 rounded">
-                <label class="flex items-center gap-1">
+            <div class="mt-4 flex flex-col sm:flex-row gap-2">
+                <input x-model="newRepo.owner" placeholder="owner" class="bg-gray-700 px-3 py-2 rounded w-full sm:w-auto">
+                <input x-model="newRepo.name" placeholder="repo" class="bg-gray-700 px-3 py-2 rounded w-full sm:w-auto">
+                <label class="flex items-center gap-2 py-2 sm:py-0">
                     <input type="checkbox" x-model="newRepo.allow_pr_tests">
                     <span class="text-sm">Allow PR tests</span>
                 </label>
-                <button @click="addRepo()" class="bg-blue-600 px-3 py-1 rounded hover:bg-blue-500">Add</button>
+                <button @click="addRepo()" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500 w-full sm:w-auto">Add</button>
             </div>
         </div>
 
         <!-- Configuration -->
         <div class="bg-gray-800 rounded-lg p-4 mb-8">
             <h2 class="text-lg font-semibold mb-4">Configuration</h2>
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <p class="text-sm text-gray-400">GitHub Token</p>
-                    <p :class="config.github_token_configured ? 'text-green-400' : 'text-red-400'"
-                       x-text="config.github_token_configured ? 'Configured (' + config.github_token_preview + ')' : 'Not configured'"></p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full" :class="config.github_token_configured ? 'bg-green-400' : 'bg-red-400'"></span>
+                    <span class="text-sm text-gray-400">GitHub:</span>
+                    <span class="text-sm" :class="config.github_token_configured ? 'text-green-400' : 'text-red-400'"
+                          x-text="config.github_token_configured ? config.github_token_preview : 'Not set'"></span>
                 </div>
-                <div>
-                    <p class="text-sm text-gray-400">Plex Token</p>
-                    <p :class="config.plex_token_configured ? 'text-green-400' : 'text-red-400'"
-                       x-text="config.plex_token_configured ? 'Configured' : 'Not configured'"></p>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full" :class="config.plex_token_configured ? 'bg-green-400' : 'bg-red-400'"></span>
+                    <span class="text-sm text-gray-400">Plex:</span>
+                    <span class="text-sm" :class="config.plex_token_configured ? 'text-green-400' : 'text-red-400'"
+                          x-text="config.plex_token_configured ? 'Configured' : 'Not set'"></span>
                 </div>
             </div>
-            <p class="text-sm text-gray-500 mt-4">Tokens are set via environment variables in docker-compose.yml</p>
+            <p class="text-xs text-gray-500 mt-3">Set via environment variables in docker-compose.yml</p>
         </div>
 
         <!-- Approved Users -->
@@ -592,15 +619,15 @@ async def dashboard():
             <h2 class="text-lg font-semibold mb-4">Approved Committers</h2>
             <div class="flex flex-wrap gap-2 mb-4">
                 <template x-for="user in approvedUsers" :key="user.id">
-                    <span class="bg-gray-700 px-2 py-1 rounded flex items-center gap-2">
+                    <span class="bg-gray-700 px-2 py-1 rounded flex items-center gap-2 text-sm">
                         <span x-text="user.github_username"></span>
                         <button @click="removeUser(user)" class="text-red-400 hover:text-red-300">&times;</button>
                     </span>
                 </template>
             </div>
-            <div class="flex gap-2">
-                <input x-model="newUsername" placeholder="GitHub username" class="bg-gray-700 px-2 py-1 rounded">
-                <button @click="addUser()" class="bg-blue-600 px-3 py-1 rounded hover:bg-blue-500">Add User</button>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <input x-model="newUsername" placeholder="GitHub username" class="bg-gray-700 px-3 py-2 rounded flex-1">
+                <button @click="addUser()" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500">Add User</button>
             </div>
         </div>
     </div>
