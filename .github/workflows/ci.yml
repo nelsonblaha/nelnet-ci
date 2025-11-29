@@ -45,6 +45,7 @@ jobs:
         run: |
           cd /home/ben/src/nelnet-ci
           git config --global --add safe.directory /home/ben/src/nelnet-ci
+          git remote set-url origin https://github.com/nelsonblaha/nelnet-ci.git
           git fetch origin
           git reset --hard origin/master
           cd dashboard
