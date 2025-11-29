@@ -7,7 +7,7 @@ services:
       - "8101:8000"
     environment:
       - DATABASE_PATH=/data/nelnet-ci.db
-      - PLEX_URL=${PLEX_URL:-http://host.docker.internal:32400}
+      - PLEX_URL=${PLEX_URL:-http://172.17.0.1:32400}
       - PLEX_TOKEN=${PLEX_TOKEN}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - VIRTUAL_HOST=ci.blaha.io
@@ -20,7 +20,6 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - infra-net
-      - bridge
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
       interval: 30s
@@ -29,6 +28,4 @@ services:
 
 networks:
   infra-net:
-    external: true
-  bridge:
     external: true
