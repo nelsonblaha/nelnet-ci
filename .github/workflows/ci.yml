@@ -44,6 +44,7 @@ jobs:
       - name: Deploy dashboard
         run: |
           cd /home/ben/src/nelnet-ci
+          git config --global --add safe.directory /home/ben/src/nelnet-ci
           git fetch origin
           git reset --hard origin/master
           cd dashboard
