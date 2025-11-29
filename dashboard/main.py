@@ -444,8 +444,8 @@ async def get_status():
 
 
 @app.get("/api/repos")
-async def list_repos(_: bool = Depends(verify_read_access)):
-    """List all configured repositories."""
+async def list_repos():
+    """List all configured repositories (public read-only)."""
     async with get_db() as db:
         cursor = await db.execute("SELECT * FROM repos ORDER BY owner, name")
         rows = await cursor.fetchall()
