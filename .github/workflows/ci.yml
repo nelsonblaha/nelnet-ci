@@ -37,7 +37,7 @@ jobs:
 
   # Deploy dashboard and manager to nelnet
   deploy:
-    needs: [test, test-runner-image]
+    needs: [test]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: self-hosted
     steps:
