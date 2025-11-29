@@ -456,6 +456,12 @@ class Autoscaler:
             try:
                 runners = self.get_runner_containers()
 
+                # Reset frecency scores - will be recalculated from logs
+                # This ensures fresh calculation each loop without double-counting
+                for repo in self.state.repo_stats:
+                    self.state.repo_stats[repo].frecency_score = 0.0
+                self.seen_jobs.clear()
+
                 # Update stats from logs
                 for runner in runners:
                     if runner.status not in ("running", "paused"):
@@ -490,22 +496,19 @@ class Autoscaler:
                                     if job_time > stats.last_job_time:
                                         stats.last_job_time = job_time
 
-                                    # Debounce frecency: only count once per 30s per repo
-                                    # Uses job timestamp so historical logs are counted correctly
-                                    # 30s is enough to lump parallel matrix jobs together
+                                    # Debounce: only count jobs >30s apart (lumps parallel matrix jobs)
                                     last_freq = self.last_frecency_time.get(runner.repo, 0)
                                     if abs(job_time - last_freq) > 30:
-                                        # Apply decay before adding new point (half-life 1 hour)
-                                        # This ensures recent activity outweighs old bursts
-                                        if last_freq > 0:
-                                            time_elapsed = abs(job_time - last_freq)
-                                            decay = 0.5 ** (time_elapsed / 3600)
-                                            stats.frecency_score *= decay
-                                        stats.frecency_score += 1.0
-                                        # Only advance last_freq if this job is newer
+                                        # Calculate this job's contribution based on age
+                                        # Half-life of 1 hour: job from 1hr ago contributes 0.5, 2hrs = 0.25, etc.
+                                        now = time.time()
+                                        age_hours = (now - job_time) / 3600
+                                        contribution = 0.5 ** age_hours
+                                        stats.frecency_score += contribution
+                                        # Track this job's time for debouncing
                                         if job_time > last_freq:
                                             self.last_frecency_time[runner.repo] = job_time
-                                        log.info(f"Frecency +1 for {runner.repo} (now {stats.frecency_score:.1f}): {line.strip()}")
+                                        log.info(f"Frecency +{contribution:.2f} for {runner.repo} (now {stats.frecency_score:.1f}): {line.strip()}")
 
                     except Exception as e:
                         log.warning(f"Failed to parse logs for {runner.name}: {e}")
