@@ -631,7 +631,10 @@ async def dashboard():
                             </div>
                         </div>
 
-                        <!-- Runners list -->
+                        <!-- Runners list or warning -->
+                        <div x-show="!repo.runners || repo.runners.length === 0" class="ml-6 mt-2 text-sm text-yellow-500">
+                            ⚠ No self-hosted runner assigned
+                        </div>
                         <div x-show="repo.runners && repo.runners.length > 0" class="ml-6 mt-3 space-y-1">
                             <template x-for="runner in repo.runners" :key="runner.id">
                                 <div class="flex items-center gap-2 text-sm">
