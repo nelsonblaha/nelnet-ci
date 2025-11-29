@@ -650,8 +650,8 @@ async def dashboard():
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
                                           x-text="getStatusText(repo.ci_status)"></span>
                                 </a>
-                                <div class="w-16 bg-gray-700 rounded-full h-1.5 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0)">
-                                    <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + Math.min(100, (repo.frecency || 0) / (maxFrecency || 1) * 100) + '%'"></div>
+                                <div x-show="showFrecencyBars" class="w-16 bg-gray-700 rounded-full h-1.5 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0)">
+                                    <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + ((repo.frecency || 0) - minFrecency) / (maxFrecency - minFrecency) * 100 + '%'"></div>
                                 </div>
                             </div>
                             <div class="flex items-center gap-3">
@@ -745,7 +745,9 @@ async def dashboard():
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
             lastReposUpdate: null,
             reposAgeSeconds: 0,
-            maxFrecency: 1,
+            maxFrecency: 0,
+            minFrecency: 0,
+            showFrecencyBars: false,
 
             async init() {
                 await this.refresh();
@@ -773,7 +775,11 @@ async def dashboard():
                 const resp = await fetch('/api/repos', { headers: this.authHeader });
                 if (resp.ok) {
                     this.repos = await resp.json();
-                    this.maxFrecency = Math.max(...this.repos.map(r => r.frecency || 0), 1);
+                    const frecencies = this.repos.map(r => r.frecency || 0);
+                    this.maxFrecency = Math.max(...frecencies, 0);
+                    this.minFrecency = Math.min(...frecencies, 0);
+                    // Only show bars when there's differentiation
+                    this.showFrecencyBars = this.maxFrecency > this.minFrecency;
                     this.lastReposUpdate = Date.now();
                     this.reposAgeSeconds = 0;
                 }

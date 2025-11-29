@@ -1,0 +1,13 @@
+[Unit]
+Description=Connect CI Dashboard to bridge network for Plex access
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/ben/src/nelnet-ci/dashboard/bridge-connector.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

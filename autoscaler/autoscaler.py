@@ -20,8 +20,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -132,6 +134,10 @@ class Autoscaler:
         self.load_state()
         # Track last spawn time per repo to prevent rapid spawning
         self.last_spawn_time: Dict[str, float] = {}
+        # Track seen job identifiers to avoid re-counting old log lines
+        self.seen_jobs: set = set()
+        # Track last frecency increment time per repo to debounce parallel runners
+        self.last_frecency_time: Dict[str, float] = {}
 
     def load_state(self):
         """Load persistent state from disk."""
@@ -463,8 +469,31 @@ class Autoscaler:
 
                         for line in logs.split("\n"):
                             if "Running job:" in line:
-                                stats.last_job_time = time.time()
-                                stats.frecency_score += 1.0
+                                # Create unique job identifier: container + job name
+                                job_id = f"{runner.container_id}:{line.strip()}"
+                                if job_id not in self.seen_jobs:
+                                    self.seen_jobs.add(job_id)
+                                    # Parse timestamp from log line: "2025-11-29 18:04:17Z: Running job: test"
+                                    job_time = time.time()  # fallback
+                                    ts_match = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})Z?:", line.strip())
+                                    if ts_match:
+                                        try:
+                                            dt = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S")
+                                            job_time = dt.timestamp()
+                                        except ValueError:
+                                            pass
+
+                                    # Update last_job_time if this job is more recent
+                                    if job_time > stats.last_job_time:
+                                        stats.last_job_time = job_time
+
+                                    # Debounce frecency: only count once per 60s per repo
+                                    # Uses job timestamp so historical logs are counted correctly
+                                    last_freq = self.last_frecency_time.get(runner.repo, 0)
+                                    if job_time - last_freq > 60:
+                                        stats.frecency_score += 1.0
+                                        self.last_frecency_time[runner.repo] = job_time
+                                        log.info(f"Frecency +1 for {runner.repo}: {line.strip()}")
 
                     except Exception as e:
                         log.warning(f"Failed to parse logs for {runner.name}: {e}")
