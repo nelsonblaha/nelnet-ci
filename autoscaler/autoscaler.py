@@ -482,11 +482,12 @@ class Autoscaler:
                         stats.peak_concurrent = count
 
                 # === DYNAMIC SCALING ===
-                # Find repos that need a marginal runner (all busy, no idle)
+                # Find repos that need a marginal runner (no idle runner available)
+                # This includes repos with all runners busy AND repos with 0 idle
                 repos_needing_runner = []
-                for repo in busy_by_repo:
+                for repo in repo_urls:
                     idle_count = idle_by_repo.get(repo, 0)
-                    if idle_count == 0 and repo in repo_urls:
+                    if idle_count == 0:  # No idle runner for this repo
                         repos_needing_runner.append(repo)
 
                 if repos_needing_runner:
