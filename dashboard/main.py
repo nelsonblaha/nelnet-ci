@@ -426,6 +426,16 @@ async def list_repos(_: bool = Depends(verify_admin)):
     # Get all runners and map them to repos
     all_runners = get_runner_containers()
 
+    # Load autoscaler stats for frecency
+    autoscaler_stats = {}
+    try:
+        import json
+        with open("/data/autoscaler.json") as f:
+            data = json.load(f)
+            autoscaler_stats = data.get("repo_stats", {})
+    except Exception:
+        pass
+
     # Fetch CI status for each repo and attach matching runners
     import asyncio
 
@@ -434,6 +444,10 @@ async def list_repos(_: bool = Depends(verify_admin)):
         # Find runners assigned to this repo
         repo_full = f"{repo['owner']}/{repo['name']}"
         repo["runners"] = [r for r in all_runners if r.get("repo") == repo_full]
+        # Add frecency from autoscaler stats
+        stats = autoscaler_stats.get(repo_full, {})
+        repo["frecency"] = stats.get("frecency_score", 0)
+        repo["peak_concurrent"] = stats.get("peak_concurrent", 1)
 
     await asyncio.gather(*[fetch_repo_data(repo) for repo in repos])
 
@@ -636,6 +650,7 @@ async def dashboard():
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
                                           x-text="getStatusText(repo.ci_status)"></span>
                                 </a>
+                                <span class="text-xs text-gray-500" x-text="'frecency: ' + (repo.frecency || 0).toFixed(0) + ' / peak: ' + (repo.peak_concurrent || 1)"></span>
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
