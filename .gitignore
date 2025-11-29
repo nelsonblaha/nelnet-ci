@@ -2,6 +2,9 @@
 .env
 *.env
 
+# Personal runner configurations (use examples/ as templates)
+runners/
+
 # Dashboard data
 dashboard/data/
 
