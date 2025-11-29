@@ -57,12 +57,7 @@ jobs:
           docker compose down
           docker compose up -d --build
 
-      - name: Copy autoscaler to runners directory
+      - name: Restart manager to pick up autoscaler changes
         run: |
-          cp /home/ben/src/nelnet-ci/autoscaler/autoscaler.py /home/ben/github-runners/autoscaler.py
-
-      - name: Rebuild and restart manager with autoscaler
-        run: |
-          cd /home/ben/github-runners
-          docker compose build nelnet-ci-manager
-          docker compose up -d nelnet-ci-manager
+          # Manager's entrypoint copies autoscaler from mounted nelnet-ci repo
+          docker restart github-runners-nelnet-ci-manager-1 || true
