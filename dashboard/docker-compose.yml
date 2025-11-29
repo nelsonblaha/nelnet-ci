@@ -19,10 +19,10 @@ services:
       # Optional: Plex integration
       - PLEX_URL=${PLEX_URL:-}
       - PLEX_TOKEN=${PLEX_TOKEN:-}
-      # Optional: Reverse proxy (nginx-proxy)
-      # - VIRTUAL_HOST=ci.example.com
-      # - VIRTUAL_PORT=8000
-      # - LETSENCRYPT_HOST=ci.example.com
+      # Optional: Reverse proxy (nginx-proxy) - set in .env
+      - VIRTUAL_HOST=${VIRTUAL_HOST:-}
+      - VIRTUAL_PORT=8000
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-}
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
