@@ -200,9 +200,6 @@ def get_runner_containers() -> list:
     containers = client.containers.list(all=False)  # Only running containers
     runners = []
     for c in containers:
-        # Skip nelnet-ci runners (only used for deploy, not testing)
-        if "nelnet-ci" in c.name.lower():
-            continue
         if "runner" in c.name.lower() and "github" in c.name.lower():
             runner_info = {
                 "id": c.short_id,
@@ -560,46 +557,40 @@ async def dashboard():
         <h1 class="text-3xl font-bold mb-8">Nelnet CI Dashboard</h1>
 
         <!-- System Status -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            <div class="bg-gray-800 rounded-lg p-4">
-                <h2 class="text-lg font-semibold mb-2">System</h2>
-                <div x-show="status.system">
-                    <!-- CPU Progress Bar -->
-                    <div class="mb-3">
-                        <div class="flex justify-between text-sm mb-1">
-                            <span>CPU</span>
-                            <span x-text="status.system?.cpu_percent + '%'"></span>
-                        </div>
-                        <div class="w-full bg-gray-700 rounded-full h-3">
-                            <div class="h-3 rounded-full transition-all duration-300"
-                                 :class="status.system?.cpu_percent > 80 ? 'bg-red-500' : status.system?.cpu_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
-                                 :style="'width: ' + status.system?.cpu_percent + '%'"></div>
-                        </div>
-                        <p class="text-xs text-gray-500 mt-1"><span x-text="status.system?.cpu_count"></span> cores</p>
+        <div class="bg-gray-800 rounded-lg p-4 mb-8">
+            <h2 class="text-lg font-semibold mb-2">Resources</h2>
+            <div x-show="status.system" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- CPU Progress Bar -->
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span>CPU</span>
+                        <span x-text="status.system?.cpu_percent + '%'"></span>
                     </div>
-                    <!-- Memory Progress Bar -->
-                    <div class="mb-3">
-                        <div class="flex justify-between text-sm mb-1">
-                            <span>Memory</span>
-                            <span x-text="status.system?.memory_used_gb + '/' + status.system?.memory_total_gb + ' GB'"></span>
-                        </div>
-                        <div class="w-full bg-gray-700 rounded-full h-3">
-                            <div class="h-3 rounded-full transition-all duration-300"
-                                 :class="status.system?.memory_percent > 80 ? 'bg-red-500' : status.system?.memory_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
-                                 :style="'width: ' + status.system?.memory_percent + '%'"></div>
-                        </div>
+                    <div class="w-full bg-gray-700 rounded-full h-3">
+                        <div class="h-3 rounded-full transition-all duration-300"
+                             :class="status.system?.cpu_percent > 80 ? 'bg-red-500' : status.system?.cpu_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
+                             :style="'width: ' + status.system?.cpu_percent + '%'"></div>
                     </div>
-                    <p class="text-xs text-gray-500">Load: <span x-text="status.system?.load_avg?.map(l => l.toFixed(2)).join(', ')"></span></p>
+                    <p class="text-xs text-gray-500 mt-1"><span x-text="status.system?.cpu_count"></span> cores, load: <span x-text="status.system?.load_avg?.map(l => l.toFixed(2)).join(', ')"></span></p>
+                </div>
+                <!-- Memory Progress Bar -->
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span>Memory</span>
+                        <span x-text="status.system?.memory_used_gb + '/' + status.system?.memory_total_gb + ' GB'"></span>
+                    </div>
+                    <div class="w-full bg-gray-700 rounded-full h-3">
+                        <div class="h-3 rounded-full transition-all duration-300"
+                             :class="status.system?.memory_percent > 80 ? 'bg-red-500' : status.system?.memory_percent > 50 ? 'bg-yellow-500' : 'bg-green-500'"
+                             :style="'width: ' + status.system?.memory_percent + '%'"></div>
+                    </div>
                 </div>
             </div>
-
-            <div class="bg-gray-800 rounded-lg p-4">
-                <h2 class="text-lg font-semibold mb-2">Plex</h2>
-                <div x-show="status.plex">
-                    <p>Sessions: <span x-text="status.plex?.sessions"></span></p>
-                    <p>Transcodes: <span x-text="status.plex?.transcodes"></span></p>
-                    <p x-show="status.plex?.error" class="text-red-400" x-text="status.plex?.error"></p>
-                </div>
+            <!-- Plex stats on one line -->
+            <div x-show="status.plex && config.plex_token_configured" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-400">
+                <span>Plex: <span class="text-white" x-text="status.plex?.sessions"></span> sessions</span>
+                <span><span class="text-white" x-text="status.plex?.transcodes"></span> transcodes</span>
+                <span x-show="status.plex?.error" class="text-red-400" x-text="status.plex?.error"></span>
             </div>
         </div>
 
@@ -678,13 +669,13 @@ async def dashboard():
                           x-text="config.github_token_configured ? config.github_token_preview : 'Not set'"></span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full" :class="config.plex_token_configured ? 'bg-green-400' : 'bg-red-400'"></span>
+                    <span class="w-2 h-2 rounded-full" :class="config.plex_token_configured ? 'bg-green-400' : 'bg-gray-500'"></span>
                     <span class="text-sm text-gray-400">Plex:</span>
-                    <span class="text-sm" :class="config.plex_token_configured ? 'text-green-400' : 'text-red-400'"
-                          x-text="config.plex_token_configured ? 'Configured' : 'Not set'"></span>
+                    <span class="text-sm" :class="config.plex_token_configured ? 'text-green-400' : 'text-gray-500'"
+                          x-text="config.plex_token_configured ? 'Configured' : 'Not set (optional)'"></span>
                 </div>
             </div>
-            <p class="text-xs text-gray-500 mt-3">Set via environment variables in docker-compose.yml</p>
+            <p x-show="!config.github_token_configured" class="text-xs text-gray-500 mt-3">Set via environment variables in docker-compose.yml</p>
         </div>
 
         <!-- Approved Users -->
