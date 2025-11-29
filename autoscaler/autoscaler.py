@@ -526,17 +526,24 @@ class Autoscaler:
                         break  # Resource exhausted, stop spawning
 
                 # === CLEANUP STALE EPHEMERAL RUNNERS ===
-                # Remove idle ephemeral runners that have been idle too long
+                # Remove idle ephemeral runners only if there's already a dedicated runner idle
                 # (They should auto-exit after a job, but if they never got one, clean them up)
+                # First, count dedicated (non-ephemeral) idle runners per repo
+                dedicated_idle_by_repo: Dict[str, int] = {}
+                for runner in runners:
+                    if runner.status == "running" and not runner.is_busy:
+                        if not runner.name.startswith("runner-"):  # Not ephemeral
+                            dedicated_idle_by_repo[runner.repo] = dedicated_idle_by_repo.get(runner.repo, 0) + 1
+
                 for runner in runners:
                     if not runner.is_busy and runner.name.startswith("runner-"):
-                        # This is an idle ephemeral runner - check if there's already
-                        # a dedicated runner idle for this repo
-                        repo_idle = idle_by_repo.get(runner.repo, 0)
-                        if repo_idle > 1:  # More than one idle runner for this repo
+                        # This is an idle ephemeral runner - only remove if there's
+                        # already a dedicated runner idle for this repo
+                        dedicated_idle = dedicated_idle_by_repo.get(runner.repo, 0)
+                        if dedicated_idle >= 1:  # Dedicated runner available, ephemeral not needed
                             try:
                                 container = self.docker_client.containers.get(runner.container_id)
-                                log.info(f"Removing excess idle ephemeral runner: {runner.name}")
+                                log.info(f"Removing excess idle ephemeral runner: {runner.name} (dedicated idle: {dedicated_idle})")
                                 container.stop()
                             except Exception as e:
                                 log.warning(f"Failed to stop {runner.name}: {e}")
