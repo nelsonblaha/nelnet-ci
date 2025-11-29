@@ -333,6 +333,13 @@ class Autoscaler:
                 },
                 extra_hosts={"host.docker.internal": "host-gateway"},
                 network="blaha-ci-shared",
+                healthcheck={
+                    "test": ["CMD-SHELL", "pgrep -f 'Runner.Listener' || exit 1"],
+                    "interval": 10000000000,  # 10s in nanoseconds
+                    "timeout": 5000000000,    # 5s
+                    "retries": 3,
+                    "start_period": 30000000000,  # 30s
+                },
             )
 
             self.last_spawn_time[repo] = time.time()
