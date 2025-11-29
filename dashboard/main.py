@@ -200,7 +200,14 @@ def get_runner_containers() -> list:
     containers = client.containers.list(all=False)  # Only running containers
     runners = []
     for c in containers:
-        if "runner" in c.name.lower() and "github" in c.name.lower():
+        # Match both docker-compose runners (github-runners-*) and ephemeral runners (runner-*)
+        name_lower = c.name.lower()
+        is_runner = (
+            ("runner" in name_lower and "github" in name_lower) or
+            name_lower.startswith("runner-")
+        )
+        # Exclude manager container
+        if is_runner and "manager" not in name_lower:
             runner_info = {
                 "id": c.short_id,
                 "name": c.name,
