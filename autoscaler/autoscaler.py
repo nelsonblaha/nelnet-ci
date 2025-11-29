@@ -526,25 +526,21 @@ class Autoscaler:
                         break  # Resource exhausted, stop spawning
 
                 # === CLEANUP STALE EPHEMERAL RUNNERS ===
-                # Remove idle ephemeral runners only if there's already a dedicated runner idle
-                # (They should auto-exit after a job, but if they never got one, clean them up)
-                # First, count dedicated (non-ephemeral) idle runners per repo
-                dedicated_idle_by_repo: Dict[str, int] = {}
-                for runner in runners:
-                    if runner.status == "running" and not runner.is_busy:
-                        if not runner.name.startswith("runner-"):  # Not ephemeral
-                            dedicated_idle_by_repo[runner.repo] = dedicated_idle_by_repo.get(runner.repo, 0) + 1
-
+                # Remove idle ephemeral runners only if we have more idle than peak_concurrent
+                # We want to maintain peak_concurrent idle runners ready to go
                 for runner in runners:
                     if not runner.is_busy and runner.name.startswith("runner-"):
-                        # This is an idle ephemeral runner - only remove if there's
-                        # already a dedicated runner idle for this repo
-                        dedicated_idle = dedicated_idle_by_repo.get(runner.repo, 0)
-                        if dedicated_idle >= 1:  # Dedicated runner available, ephemeral not needed
+                        repo_idle = idle_by_repo.get(runner.repo, 0)
+                        stats = self.state.get_repo_stats(runner.repo)
+                        target_idle = max(1, stats.peak_concurrent)
+
+                        if repo_idle > target_idle:
                             try:
                                 container = self.docker_client.containers.get(runner.container_id)
-                                log.info(f"Removing excess idle ephemeral runner: {runner.name} (dedicated idle: {dedicated_idle})")
+                                log.info(f"Removing excess idle ephemeral runner: {runner.name} (idle: {repo_idle}, target: {target_idle})")
                                 container.stop()
+                                # Decrement so we don't remove too many in one pass
+                                idle_by_repo[runner.repo] = repo_idle - 1
                             except Exception as e:
                                 log.warning(f"Failed to stop {runner.name}: {e}")
 
