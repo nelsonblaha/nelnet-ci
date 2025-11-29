@@ -1,25 +1,35 @@
+# CI Dashboard
+# Shows runner status and workflow jobs
+#
+# Setup:
+# 1. Copy .env.example to .env and configure
+# 2. docker compose up -d
+# 3. Access at http://localhost:8101
+
 services:
   dashboard:
     build: .
-    container_name: nelnet-ci-dashboard
+    container_name: ci-dashboard
     restart: unless-stopped
     ports:
       - "8101:8000"
     environment:
-      - DATABASE_PATH=/data/nelnet-ci.db
-      - PLEX_URL=${PLEX_URL:-http://172.17.0.1:32400}
-      - PLEX_TOKEN=${PLEX_TOKEN}
+      - DATABASE_PATH=/data/ci.db
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - VIRTUAL_HOST=ci.blaha.io
-      - VIRTUAL_PORT=8000
-      - LETSENCRYPT_HOST=ci.blaha.io
+      # Optional: Plex integration
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      # Optional: Reverse proxy (nginx-proxy)
+      # - VIRTUAL_HOST=ci.example.com
+      # - VIRTUAL_PORT=8000
+      # - LETSENCRYPT_HOST=ci.example.com
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - infra-net
+      - ci-net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')"]
       interval: 30s
@@ -27,5 +37,5 @@ services:
       retries: 3
 
 networks:
-  infra-net:
+  ci-net:
     external: true

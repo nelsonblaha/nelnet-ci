@@ -22,11 +22,67 @@ from pydantic import BaseModel
 
 
 # Configuration
-DATABASE_PATH = os.environ.get("DATABASE_PATH", "/data/nelnet-ci.db")
-PLEX_URL = os.environ.get("PLEX_URL", "http://plex:32400")
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "/data/ci.db")
+PLEX_URL = os.environ.get("PLEX_URL", "")
 PLEX_TOKEN = os.environ.get("PLEX_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+
+
+def validate_config():
+    """Validate configuration at startup and print helpful errors."""
+    warnings = []
+    errors = []
+
+    # Check Docker socket access
+    try:
+        client = docker.from_env()
+        client.ping()
+    except docker.errors.DockerException as e:
+        errors.append(
+            f"Cannot connect to Docker: {e}\n"
+            "  → Mount the Docker socket: -v /var/run/docker.sock:/var/run/docker.sock:ro"
+        )
+
+    # Check GitHub token
+    if not GITHUB_TOKEN:
+        warnings.append(
+            "GITHUB_TOKEN not set - workflow status will be limited\n"
+            "  → Set GITHUB_TOKEN in .env or docker-compose.yml\n"
+            "  → Create a PAT at https://github.com/settings/tokens with 'repo' scope"
+        )
+
+    # Check database directory
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+        except PermissionError:
+            errors.append(
+                f"Cannot create database directory: {db_dir}\n"
+                "  → Mount a volume: -v ./data:/data"
+            )
+
+    # Check Plex configuration (optional)
+    if PLEX_URL and not PLEX_TOKEN:
+        warnings.append(
+            "PLEX_URL is set but PLEX_TOKEN is missing\n"
+            "  → Set PLEX_TOKEN in .env to enable Plex integration\n"
+            "  → Or remove PLEX_URL to disable Plex integration"
+        )
+
+    # Print results
+    if warnings:
+        print("\n⚠️  Configuration warnings:")
+        for w in warnings:
+            print(f"   {w}\n")
+
+    if errors:
+        print("\n❌ Configuration errors (dashboard may not work correctly):")
+        for e in errors:
+            print(f"   {e}\n")
+
+    return len(errors) == 0
 
 # Auto-scaling config (can be updated via API)
 DEFAULT_SCALING_CONFIG = {
@@ -315,11 +371,13 @@ async def verify_admin(request: Request):
 # App setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate configuration at startup
+    validate_config()
     await init_db()
     yield
 
 
-app = FastAPI(title="Nelnet CI Dashboard", lifespan=lifespan)
+app = FastAPI(title="CI Dashboard", lifespan=lifespan)
 
 
 # API Routes
