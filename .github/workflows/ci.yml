@@ -60,8 +60,7 @@ jobs:
       - name: Reload autoscaler
         run: |
           # Copy updated autoscaler and restart just the python process (not the whole container)
-          docker exec github-runners-nelnet-ci-manager-1 bash -c '
-            cp /home/ben/src/nelnet-ci/autoscaler/autoscaler.py /opt/autoscaler/autoscaler.py
-            pkill -f "python3 /opt/autoscaler/autoscaler.py" || true
-            nohup python3 /opt/autoscaler/autoscaler.py &>/dev/null &
-          '
+          docker exec github-runners-nelnet-ci-manager-1 cp /home/ben/src/nelnet-ci/autoscaler/autoscaler.py /opt/autoscaler/autoscaler.py
+          docker exec github-runners-nelnet-ci-manager-1 pkill -f "python3 /opt/autoscaler/autoscaler.py" || true
+          # Start new autoscaler in detached mode
+          docker exec -d github-runners-nelnet-ci-manager-1 python3 /opt/autoscaler/autoscaler.py
