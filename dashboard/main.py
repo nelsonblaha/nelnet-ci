@@ -650,7 +650,12 @@ async def dashboard():
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
                                           x-text="getStatusText(repo.ci_status)"></span>
                                 </a>
-                                <span class="text-xs text-gray-500" x-text="'frecency: ' + (repo.frecency || 0).toFixed(0) + ' / peak: ' + (repo.peak_concurrent || 1)"></span>
+                                <div class="flex items-center gap-1 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0) + ' / peak: ' + (repo.peak_concurrent || 1)">
+                                    <div class="w-16 bg-gray-700 rounded-full h-1.5">
+                                        <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + Math.min(100, (repo.frecency || 0) / (maxFrecency || 1) * 100) + '%'"></div>
+                                    </div>
+                                    <span class="text-xs text-gray-500" x-text="'×' + (repo.peak_concurrent || 1)"></span>
+                                </div>
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
@@ -743,6 +748,7 @@ async def dashboard():
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
             lastReposUpdate: null,
             reposAgeSeconds: 0,
+            maxFrecency: 1,
 
             async init() {
                 await this.refresh();
@@ -770,6 +776,7 @@ async def dashboard():
                 const resp = await fetch('/api/repos', { headers: this.authHeader });
                 if (resp.ok) {
                     this.repos = await resp.json();
+                    this.maxFrecency = Math.max(...this.repos.map(r => r.frecency || 0), 1);
                     this.lastReposUpdate = Date.now();
                     this.reposAgeSeconds = 0;
                 }
