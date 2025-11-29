@@ -470,10 +470,6 @@ class Autoscaler:
                     try:
                         container = self.docker_client.containers.get(runner.container_id)
                         logs = container.logs(tail=500).decode(errors="ignore")
-                        job_lines = [l for l in logs.split("\n") if "Running job:" in l]
-                        if job_lines:
-                            log.info(f"Container {runner.name} ({runner.repo}): {len(job_lines)} job lines")
-
                         stats = self.state.get_repo_stats(runner.repo)
 
                         for line in logs.split("\n"):
@@ -508,7 +504,7 @@ class Autoscaler:
                                         # Track this job's time for debouncing
                                         if job_time > last_freq:
                                             self.last_frecency_time[runner.repo] = job_time
-                                        log.info(f"Frecency +{contribution:.2f} for {runner.repo} (now {stats.frecency_score:.1f}): {line.strip()}")
+                                        log.debug(f"Frecency +{contribution:.2f} for {runner.repo}: {line.strip()}")
 
                     except Exception as e:
                         log.warning(f"Failed to parse logs for {runner.name}: {e}")
