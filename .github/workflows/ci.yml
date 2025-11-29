@@ -57,8 +57,11 @@ jobs:
           docker compose down
           docker compose up -d --build
 
-      - name: Restart manager to pick up autoscaler changes
+      - name: Reload autoscaler
         run: |
-          # Manager's entrypoint copies autoscaler from mounted nelnet-ci repo
-          # Run in background with delay so runner can finish this job first
-          nohup bash -c 'sleep 5 && docker restart github-runners-nelnet-ci-manager-1' &>/dev/null &
+          # Copy updated autoscaler and restart just the python process (not the whole container)
+          docker exec github-runners-nelnet-ci-manager-1 bash -c '
+            cp /home/ben/src/nelnet-ci/autoscaler/autoscaler.py /opt/autoscaler/autoscaler.py
+            pkill -f "python3 /opt/autoscaler/autoscaler.py" || true
+            nohup python3 /opt/autoscaler/autoscaler.py &>/dev/null &
+          '
