@@ -141,9 +141,12 @@ def get_docker_client():
 def get_runner_containers() -> list:
     """Get all GitHub runner containers with job info."""
     client = get_docker_client()
-    containers = client.containers.list(all=True)
+    containers = client.containers.list(all=False)  # Only running containers
     runners = []
     for c in containers:
+        # Skip nelnet-ci runners (only used for deploy, not testing)
+        if "nelnet-ci" in c.name.lower():
+            continue
         if "runner" in c.name.lower() and "github" in c.name.lower():
             runner_info = {
                 "id": c.short_id,
