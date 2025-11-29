@@ -263,6 +263,9 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            # Fetch from both branches and return the most recent
+            latest_run = None
+            latest_time = None
             for branch in ["main", "master"]:
                 resp = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/actions/runs",
@@ -273,14 +276,17 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
                     data = resp.json()
                     if data.get("workflow_runs"):
                         run = data["workflow_runs"][0]
-                        return {
-                            "status": run.get("status"),
-                            "conclusion": run.get("conclusion"),
-                            "url": run.get("html_url"),
-                            "created_at": run.get("created_at"),
-                            "branch": branch,
-                        }
-            return {"status": "no_runs", "conclusion": None}
+                        run_time = run.get("created_at", "")
+                        if latest_time is None or run_time > latest_time:
+                            latest_time = run_time
+                            latest_run = {
+                                "status": run.get("status"),
+                                "conclusion": run.get("conclusion"),
+                                "url": run.get("html_url"),
+                                "created_at": run.get("created_at"),
+                                "branch": branch,
+                            }
+            return latest_run or {"status": "no_runs", "conclusion": None}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
