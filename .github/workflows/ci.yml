@@ -36,6 +36,21 @@ jobs:
       - name: Build runner image
         run: docker build -t github-runner-cypress:test runner-image/
 
+  # Deploy the dashboard to nelnet
+  deploy-dashboard:
+    needs: [test, test-runner-image]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: self-hosted
+    steps:
+      - name: Deploy dashboard
+        run: |
+          cd /home/ben/src/nelnet-ci
+          git fetch origin
+          git reset --hard origin/master
+          cd dashboard
+          docker compose down
+          docker compose up -d --build
+
   # Notify dependent repos to re-run their CI when nelnet-ci changes
   notify-dependents:
     needs: [test, test-runner-image]
