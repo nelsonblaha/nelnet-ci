@@ -464,6 +464,9 @@ class Autoscaler:
                     try:
                         container = self.docker_client.containers.get(runner.container_id)
                         logs = container.logs(tail=500).decode(errors="ignore")
+                        job_lines = [l for l in logs.split("\n") if "Running job:" in l]
+                        if job_lines:
+                            log.info(f"Container {runner.name} ({runner.repo}): {len(job_lines)} job lines")
 
                         stats = self.state.get_repo_stats(runner.repo)
 
