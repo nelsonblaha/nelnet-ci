@@ -482,25 +482,41 @@ class Autoscaler:
                         stats.peak_concurrent = count
 
                 # === DYNAMIC SCALING ===
-                # Find repos that need a marginal runner (no idle runner available)
-                # This includes repos with all runners busy AND repos with 0 idle
-                repos_needing_runner = []
-                for repo in repo_urls:
-                    idle_count = idle_by_repo.get(repo, 0)
-                    if idle_count == 0:  # No idle runner for this repo
-                        repos_needing_runner.append(repo)
+                # Pre-spawn runners based on historical peak usage
+                # Goal: maintain peak_concurrent idle runners per repo when resources permit
+                repos_needing_runners: List[Tuple[str, int]] = []  # (repo, runners_needed)
 
-                if repos_needing_runner:
+                for repo in repo_urls:
+                    stats = self.state.get_repo_stats(repo)
+                    idle_count = idle_by_repo.get(repo, 0)
+                    busy_count = busy_by_repo.get(repo, 0)
+                    current_total = idle_count + busy_count
+
+                    # Target: at least peak_concurrent runners, minimum 1
+                    target = max(1, stats.peak_concurrent)
+
+                    # How many more do we need to reach target idle?
+                    # We want `target` idle runners, currently have `idle_count`
+                    runners_needed = target - idle_count
+
+                    if runners_needed > 0:
+                        repos_needing_runners.append((repo, runners_needed))
+
+                if repos_needing_runners:
                     # Sort by priority (highest first)
-                    repos_needing_runner.sort(key=lambda r: -self.get_repo_priority(r))
+                    repos_needing_runners.sort(key=lambda r: -self.get_repo_priority(r[0]))
 
                     # Spawn for highest-priority repos until resources exhausted
-                    for repo in repos_needing_runner:
-                        if self.can_spawn_runner():
-                            self.spawn_runner(repo, repo_urls[repo])
+                    for repo, needed in repos_needing_runners:
+                        for _ in range(needed):
+                            if self.can_spawn_runner():
+                                self.spawn_runner(repo, repo_urls[repo])
+                            else:
+                                log.info(f"Skipping spawn for {repo}: insufficient resources")
+                                break
                         else:
-                            log.info(f"Skipping spawn for {repo}: insufficient resources")
-                            break  # No point checking lower-priority repos
+                            continue
+                        break  # Resource exhausted, stop spawning
 
                 self.save_state()
 
