@@ -29,6 +29,44 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_USERS = os.environ.get("ADMIN_USERS", "Ben").split(",")
 
+# Build info - set at startup
+BUILD_COMMIT = os.environ.get("BUILD_COMMIT", "")
+BUILD_MESSAGE = os.environ.get("BUILD_MESSAGE", "")
+
+
+def get_build_info() -> dict:
+    """Get build commit info from env or git."""
+    import subprocess
+    commit = BUILD_COMMIT
+    message = BUILD_MESSAGE
+
+    if not commit:
+        try:
+            # Try to get from git in source mount
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+                cwd="/home/ben/src/nelnet-ci"
+            )
+            if result.returncode == 0:
+                commit = result.stdout.strip()
+        except Exception:
+            pass
+
+    if not message and commit:
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%s", commit],
+                capture_output=True, text=True, timeout=5,
+                cwd="/home/ben/src/nelnet-ci"
+            )
+            if result.returncode == 0:
+                message = result.stdout.strip()[:60]  # Truncate long messages
+        except Exception:
+            pass
+
+    return {"commit": commit or "unknown", "message": message or ""}
+
 
 def validate_config():
     """Validate configuration at startup and print helpful errors."""
@@ -620,6 +658,12 @@ async def set_config(key: str, value: str, _: bool = Depends(verify_admin)):
     return {"status": "ok"}
 
 
+@app.get("/api/build-info")
+async def build_info():
+    """Get build commit info."""
+    return get_build_info()
+
+
 # Simple HTML UI
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
@@ -628,6 +672,8 @@ async def dashboard():
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nelnet CI Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -693,26 +739,31 @@ async def dashboard():
                 <template x-for="repo in repos" :key="repo.id">
                     <div class="bg-gray-700/50 rounded-lg p-4">
                         <!-- Repo header -->
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="flex items-center gap-3">
+                        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
+                            <div class="flex flex-wrap items-center gap-2 sm:gap-3">
                                 <span class="inline-block w-3 h-3 rounded-full"
                                       :class="getStatusDotClass(repo.ci_status)"></span>
                                 <a :href="'https://github.com/' + repo.owner + '/' + repo.name"
                                    target="_blank" class="text-blue-400 hover:underline font-medium"
                                    x-text="repo.owner + '/' + repo.name"></a>
-                                <a :href="repo.ci_status?.url" target="_blank">
+                                <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-1">
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
-                                          x-text="getStatusText(repo.ci_status)"></span>
+                                          x-text="getStatusText(repo.ci_status, getPreviousConclusion(repo))"></span>
+                                    <span class="text-xs text-gray-500" x-text="getTimeAgo(repo.ci_status?.created_at)"></span>
                                 </a>
-                                <div x-show="showFrecencyBars" class="w-16 bg-gray-700 rounded-full h-1.5 ml-2" :title="'frecency: ' + (repo.frecency || 0).toFixed(0)">
-                                    <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + ((repo.frecency || 0) - minFrecency) / (maxFrecency - minFrecency) * 100 + '%'"></div>
-                                </div>
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
                                 <button @click="removeRepo(repo)" :disabled="!userInfo.isAdmin"
                                         :class="userInfo.isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-600 cursor-not-allowed'"
                                         class="text-sm" :title="userInfo.isAdmin ? 'Remove repo' : 'Admin only'">&times;</button>
+                            </div>
+                        </div>
+                        <!-- Frecency bar -->
+                        <div x-show="showFrecencyBars" class="flex items-center gap-2 ml-6 mb-2">
+                            <span class="text-xs text-gray-500 w-14">frecency:</span>
+                            <div class="flex-1 max-w-24 bg-gray-700 rounded-full h-1.5" :title="(repo.frecency || 0).toFixed(2)">
+                                <div class="bg-blue-500 h-1.5 rounded-full" :style="'width: ' + ((repo.frecency || 0) - minFrecency) / (maxFrecency - minFrecency) * 100 + '%'"></div>
                             </div>
                         </div>
 
@@ -799,6 +850,12 @@ async def dashboard():
                         class="px-4 py-2 rounded">Add User</button>
             </div>
         </div>
+
+        <!-- Footer with build info -->
+        <div class="mt-8 text-center text-xs text-gray-600">
+            <span x-show="buildInfo.commit" x-text="buildInfo.commit"></span>
+            <span x-show="buildInfo.message" class="ml-2" x-text="buildInfo.message"></span>
+        </div>
     </div>
 
     <script>
@@ -806,8 +863,10 @@ async def dashboard():
         return {
             status: {},
             repos: [],
+            previousConclusions: {},  // Track previous conclusions per repo
             approvedUsers: [],
             config: {},
+            buildInfo: { commit: '', message: '' },
             userInfo: { username: 'Loading...', isAdmin: false, authenticated: false },
             newRepo: { owner: '', name: '', allow_pr_tests: false },
             newUsername: '',
@@ -820,6 +879,7 @@ async def dashboard():
 
             async init() {
                 await this.loadUserInfo();
+                await this.loadBuildInfo();
                 await this.refresh();
                 setInterval(() => this.loadStatus(), 10000);  // System status every 10s
                 setInterval(() => this.loadRepos(), 10000);   // Repos & runners every 10s
@@ -832,6 +892,15 @@ async def dashboard():
                     if (resp.ok) this.userInfo = await resp.json();
                 } catch (e) {
                     console.error('Failed to load user info:', e);
+                }
+            },
+
+            async loadBuildInfo() {
+                try {
+                    const resp = await fetch('/api/build-info');
+                    if (resp.ok) this.buildInfo = await resp.json();
+                } catch (e) {
+                    console.error('Failed to load build info:', e);
                 }
             },
 
@@ -853,7 +922,15 @@ async def dashboard():
             async loadRepos() {
                 const resp = await fetch('/api/repos', { headers: this.authHeader });
                 if (resp.ok) {
-                    this.repos = await resp.json();
+                    const newRepos = await resp.json();
+                    // Track previous conclusions for "was failed" display
+                    newRepos.forEach(repo => {
+                        const key = repo.owner + '/' + repo.name;
+                        if (repo.ci_status?.conclusion) {
+                            this.previousConclusions[key] = repo.ci_status.conclusion;
+                        }
+                    });
+                    this.repos = newRepos;
                     const frecencies = this.repos.map(r => r.frecency || 0);
                     this.maxFrecency = Math.max(...frecencies, 0);
                     this.minFrecency = Math.min(...frecencies, 0);
@@ -862,6 +939,10 @@ async def dashboard():
                     this.lastReposUpdate = Date.now();
                     this.reposAgeSeconds = 0;
                 }
+            },
+
+            getPreviousConclusion(repo) {
+                return this.previousConclusions[repo.owner + '/' + repo.name];
             },
 
             async loadUsers() {
@@ -928,11 +1009,40 @@ async def dashboard():
                 return 'bg-gray-400';
             },
 
-            getStatusText(status) {
-                if (!status) return 'Unknown';
-                if (status.conclusion) return status.conclusion;
-                if (status.status) return status.status;
-                return 'Unknown';
+            getStatusText(status, previousConclusion) {
+                if (!status) return 'unknown';
+                let text = '';
+                if (status.conclusion === 'failure') {
+                    text = 'failed';
+                } else if (status.conclusion === 'success') {
+                    text = 'success';
+                } else if (status.status === 'in_progress') {
+                    text = 'in progress';
+                    if (previousConclusion === 'failure') {
+                        text += ' (was failed)';
+                    }
+                } else if (status.conclusion) {
+                    text = status.conclusion;
+                } else if (status.status) {
+                    text = status.status.replace(/_/g, ' ');
+                } else {
+                    text = 'unknown';
+                }
+                return text;
+            },
+
+            getTimeAgo(dateStr) {
+                if (!dateStr) return '';
+                const date = new Date(dateStr);
+                const now = new Date();
+                const seconds = Math.floor((now - date) / 1000);
+                if (seconds < 60) return seconds + 's ago';
+                const minutes = Math.floor(seconds / 60);
+                if (minutes < 60) return minutes + 'm ago';
+                const hours = Math.floor(minutes / 60);
+                if (hours < 24) return hours + 'h ago';
+                const days = Math.floor(hours / 24);
+                return days + 'd ago';
             }
         }
     }
