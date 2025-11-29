@@ -20,6 +20,7 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - infra-net
+      - bridge
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/status"]
       interval: 30s
@@ -28,4 +29,6 @@ services:
 
 networks:
   infra-net:
+    external: true
+  bridge:
     external: true

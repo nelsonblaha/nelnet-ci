@@ -188,7 +188,7 @@ def get_runner_containers() -> list:
                     # Determine current state based on which message came last
                     if last_listening_idx > last_running_idx:
                         runner_info["job"] = "idle"
-                        runner_info["repo"] = None  # Clear repo when idle
+                        # Keep repo when idle so we know which repo it was last working on
                     elif last_job_name:
                         runner_info["job"] = last_job_name
                 except Exception:
