@@ -318,29 +318,36 @@ def get_runner_containers() -> list:
 
 # GitHub API
 async def get_workflow_status(owner: str, repo: str) -> dict:
-    """Get latest workflow run status for a repo."""
+    """Get latest workflow run status with job details and previous run info."""
     headers = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Fetch from both branches and return the most recent
+            # Fetch latest 2 runs to get previous conclusion
             latest_run = None
+            previous_conclusion = None
             latest_time = None
+
             for branch in ["main", "master"]:
                 resp = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/actions/runs",
-                    params={"per_page": 1, "branch": branch},
+                    params={"per_page": 2, "branch": branch},
                     headers=headers
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data.get("workflow_runs"):
-                        run = data["workflow_runs"][0]
+                    runs = data.get("workflow_runs", [])
+                    if runs:
+                        run = runs[0]
                         run_time = run.get("created_at", "")
                         if latest_time is None or run_time > latest_time:
                             latest_time = run_time
+
+                            # Get previous run conclusion if available
+                            if len(runs) > 1:
+                                previous_conclusion = runs[1].get("conclusion")
 
                             # Calculate duration if run is completed
                             duration_seconds = None
@@ -353,6 +360,24 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
                                     end_dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
                                     duration_seconds = int((end_dt - start_dt).total_seconds())
 
+                            # Check if deploying (tests passed but deploy job not complete)
+                            is_deploying = False
+                            if run.get("status") == "in_progress":
+                                # Fetch jobs for this run
+                                jobs_resp = await client.get(
+                                    f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run['id']}/jobs",
+                                    headers=headers
+                                )
+                                if jobs_resp.status_code == 200:
+                                    jobs = jobs_resp.json().get("jobs", [])
+                                    deploy_job = next((j for j in jobs if "deploy" in j.get("name", "").lower()), None)
+                                    test_jobs = [j for j in jobs if "deploy" not in j.get("name", "").lower()]
+
+                                    # Deploying if: all non-deploy jobs succeeded and deploy job is running/queued
+                                    if deploy_job and all(j.get("conclusion") == "success" for j in test_jobs if j.get("status") == "completed"):
+                                        if deploy_job.get("status") in ["in_progress", "queued"]:
+                                            is_deploying = True
+
                             latest_run = {
                                 "status": run.get("status"),
                                 "conclusion": run.get("conclusion"),
@@ -361,6 +386,8 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
                                 "branch": branch,
                                 "duration_seconds": duration_seconds,
                                 "run_id": run.get("id"),
+                                "previous_conclusion": previous_conclusion,
+                                "is_deploying": is_deploying,
                             }
             return latest_run or {"status": "no_runs", "conclusion": None}
     except Exception as e:
@@ -823,7 +850,7 @@ async def dashboard():
                                    x-text="repo.owner + '/' + repo.name"></a>
                                 <a :href="repo.ci_status?.url" target="_blank" class="flex items-center gap-1">
                                     <span class="text-sm" :class="getStatusClass(repo.ci_status)"
-                                          x-text="getStatusText(repo.ci_status, getPreviousConclusion(repo))"></span>
+                                          x-text="getStatusText(repo.ci_status)"></span>
                                     <span class="text-xs text-gray-500" x-text="getTimeAgo(repo.ci_status?.created_at)"></span>
                                 </a>
                                 <span x-show="repo.avg_duration_seconds" class="text-xs text-gray-500"
@@ -941,7 +968,6 @@ async def dashboard():
         return {
             status: {},
             repos: [],
-            previousConclusions: {},  // Track previous conclusions per repo
             approvedUsers: [],
             config: {},
             buildInfo: { commit: '', message: '' },
@@ -1000,15 +1026,7 @@ async def dashboard():
             async loadRepos() {
                 const resp = await fetch('/api/repos', { headers: this.authHeader });
                 if (resp.ok) {
-                    const newRepos = await resp.json();
-                    // Track previous conclusions for "was failed" display
-                    newRepos.forEach(repo => {
-                        const key = repo.owner + '/' + repo.name;
-                        if (repo.ci_status?.conclusion) {
-                            this.previousConclusions[key] = repo.ci_status.conclusion;
-                        }
-                    });
-                    this.repos = newRepos;
+                    this.repos = await resp.json();
                     const frecencies = this.repos.map(r => r.frecency || 0);
                     this.maxFrecency = Math.max(...frecencies, 0);
                     this.minFrecency = Math.min(...frecencies, 0);
@@ -1017,10 +1035,6 @@ async def dashboard():
                     this.lastReposUpdate = Date.now();
                     this.reposAgeSeconds = 0;
                 }
-            },
-
-            getPreviousConclusion(repo) {
-                return this.previousConclusions[repo.owner + '/' + repo.name];
             },
 
             async loadUsers() {
@@ -1087,26 +1101,32 @@ async def dashboard():
                 return 'bg-gray-400';
             },
 
-            getStatusText(status, previousConclusion) {
+            getStatusText(status) {
                 if (!status) return 'unknown';
-                let text = '';
-                if (status.conclusion === 'failure') {
-                    text = 'failed';
-                } else if (status.conclusion === 'success') {
-                    text = 'success';
-                } else if (status.status === 'in_progress') {
-                    text = 'in progress';
-                    if (previousConclusion === 'failure') {
-                        text += ' (was failed)';
-                    }
-                } else if (status.conclusion) {
-                    text = status.conclusion;
-                } else if (status.status) {
-                    text = status.status.replace(/_/g, ' ');
-                } else {
-                    text = 'unknown';
+
+                // Failed
+                if (status.conclusion === 'failure') return 'failed';
+
+                // Success
+                if (status.conclusion === 'success') return 'success';
+
+                // In progress states
+                if (status.status === 'in_progress') {
+                    // Deploying: tests passed, deploy job running
+                    if (status.is_deploying) return 'deploying';
+
+                    // Fixing: previous run failed
+                    if (status.previous_conclusion === 'failure') return 'fixing';
+
+                    // Normal in progress
+                    return 'in progress';
                 }
-                return text;
+
+                // Other conclusions/statuses
+                if (status.conclusion) return status.conclusion;
+                if (status.status) return status.status.replace(/_/g, ' ');
+
+                return 'unknown';
             },
 
             getTimeAgo(dateStr) {
