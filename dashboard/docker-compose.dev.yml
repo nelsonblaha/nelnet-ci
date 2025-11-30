@@ -1,0 +1,49 @@
+# Development mode for CI Dashboard
+# Hot-reloads on code changes
+#
+# Usage:
+# docker compose -f docker-compose.dev.yml up
+
+services:
+  dashboard:
+    image: python:3.11-slim
+    container_name: ci-dashboard-dev
+    restart: unless-stopped
+    ports:
+      - "8101:8000"
+    environment:
+      - DATABASE_PATH=/data/ci.db
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - VIRTUAL_HOST=${VIRTUAL_HOST:-}
+      - VIRTUAL_PORT=8000
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-}
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - autoscaler-data:/autoscaler-data:ro
+      - ./main.py:/app/main.py:ro  # Mount source for hot reload
+      - ./requirements.txt:/app/requirements.txt:ro
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - infra-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  infra-net:
+    external: true
+
+volumes:
+  autoscaler-data:
+    external: true
+    name: github-runners_autoscaler-data

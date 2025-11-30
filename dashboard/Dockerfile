@@ -6,6 +6,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Cache busting for production builds - set via: docker build --build-arg CACHEBUST=$(date +%s)
+ARG CACHEBUST=1
+RUN echo "Build timestamp: ${CACHEBUST}"
+
 # Copy app
 COPY main.py .
 

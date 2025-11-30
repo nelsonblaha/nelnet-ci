@@ -55,7 +55,8 @@ jobs:
         run: |
           cd /home/ben/src/nelnet-ci/dashboard
           docker compose down
-          docker compose up -d --build
+          docker compose build --build-arg CACHEBUST=$(date +%s)
+          docker compose up -d
 
       - name: Reload autoscaler
         run: |
