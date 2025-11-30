@@ -162,6 +162,17 @@ async def init_db():
                 value TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS run_durations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                run_id INTEGER NOT NULL UNIQUE,
+                duration_seconds INTEGER NOT NULL,
+                conclusion TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -330,12 +341,26 @@ async def get_workflow_status(owner: str, repo: str) -> dict:
                         run_time = run.get("created_at", "")
                         if latest_time is None or run_time > latest_time:
                             latest_time = run_time
+
+                            # Calculate duration if run is completed
+                            duration_seconds = None
+                            if run.get("status") == "completed":
+                                started = run.get("run_started_at")
+                                updated = run.get("updated_at")
+                                if started and updated:
+                                    from datetime import datetime
+                                    start_dt = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                                    end_dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
+                                    duration_seconds = int((end_dt - start_dt).total_seconds())
+
                             latest_run = {
                                 "status": run.get("status"),
                                 "conclusion": run.get("conclusion"),
                                 "url": run.get("html_url"),
                                 "created_at": run.get("created_at"),
                                 "branch": branch,
+                                "duration_seconds": duration_seconds,
+                                "run_id": run.get("id"),
                             }
             return latest_run or {"status": "no_runs", "conclusion": None}
     except Exception as e:
@@ -389,6 +414,40 @@ async def check_user_approved(username: str) -> bool:
             (username.lower(),)
         )
         return await cursor.fetchone() is not None
+
+
+async def record_run_duration(owner: str, name: str, run_id: int, duration_seconds: int, conclusion: str):
+    """Record a workflow run duration in the database."""
+    async with get_db() as db:
+        try:
+            await db.execute(
+                "INSERT INTO run_durations (owner, name, run_id, duration_seconds, conclusion) VALUES (?, ?, ?, ?, ?)",
+                (owner, name, run_id, duration_seconds, conclusion)
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            # Run already recorded, ignore
+            pass
+
+
+async def get_average_duration(owner: str, name: str, limit: int = 10) -> dict:
+    """Get average duration for successful runs over the last N runs."""
+    async with get_db() as db:
+        # Get average of successful runs only (failures might timeout and skew the data)
+        cursor = await db.execute(
+            """SELECT AVG(duration_seconds) as avg_duration, COUNT(*) as count
+               FROM (SELECT duration_seconds FROM run_durations
+                     WHERE owner = ? AND name = ? AND conclusion = 'success'
+                     ORDER BY created_at DESC LIMIT ?)""",
+            (owner, name, limit)
+        )
+        row = await cursor.fetchone()
+        if row and row["avg_duration"]:
+            return {
+                "avg_seconds": int(row["avg_duration"]),
+                "sample_size": row["count"]
+            }
+        return {"avg_seconds": None, "sample_size": 0}
 
 
 # API Models
@@ -507,6 +566,22 @@ async def list_repos():
 
     async def fetch_repo_data(repo):
         repo["ci_status"] = await get_workflow_status(repo["owner"], repo["name"])
+
+        # Record run duration if we have a completed run
+        if repo["ci_status"].get("duration_seconds") and repo["ci_status"].get("run_id"):
+            await record_run_duration(
+                repo["owner"],
+                repo["name"],
+                repo["ci_status"]["run_id"],
+                repo["ci_status"]["duration_seconds"],
+                repo["ci_status"].get("conclusion", "unknown")
+            )
+
+        # Get average duration
+        avg_duration = await get_average_duration(repo["owner"], repo["name"])
+        repo["avg_duration_seconds"] = avg_duration.get("avg_seconds")
+        repo["avg_duration_sample_size"] = avg_duration.get("sample_size", 0)
+
         # Find runners assigned to this repo
         repo_full = f"{repo['owner']}/{repo['name']}"
         repo["runners"] = [r for r in all_runners if r.get("repo") == repo_full]
@@ -751,6 +826,9 @@ async def dashboard():
                                           x-text="getStatusText(repo.ci_status, getPreviousConclusion(repo))"></span>
                                     <span class="text-xs text-gray-500" x-text="getTimeAgo(repo.ci_status?.created_at)"></span>
                                 </a>
+                                <span x-show="repo.avg_duration_seconds" class="text-xs text-gray-500"
+                                      :title="'Average of last ' + repo.avg_duration_sample_size + ' successful runs'"
+                                      x-text="'~' + formatDuration(repo.avg_duration_seconds)"></span>
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
@@ -1043,6 +1121,17 @@ async def dashboard():
                 if (hours < 24) return hours + 'h ago';
                 const days = Math.floor(hours / 24);
                 return days + 'd ago';
+            },
+
+            formatDuration(seconds) {
+                if (!seconds) return '';
+                if (seconds < 60) return seconds + 's';
+                const minutes = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                if (minutes < 60) return secs > 0 ? `${minutes}m${secs}s` : `${minutes}m`;
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                return mins > 0 ? `${hours}h${mins}m` : `${hours}h`;
             }
         }
     }
