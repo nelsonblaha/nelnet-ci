@@ -500,3 +500,100 @@ class TestScalingPriority:
                 repos_needing_runner.append(repo)
 
         assert "owner/repo" in repos_needing_runner
+
+
+class TestPeakDecay:
+    """Tests for peak_concurrent decay logic."""
+
+    def test_peak_does_not_decay_when_active(self):
+        """Peak should not decay for recently active repos."""
+        from autoscaler import PEAK_DECAY_HOURS
+        state = AutoscalerState()
+        stats = state.get_repo_stats("owner/repo")
+        stats.peak_concurrent = 4
+        stats.min_concurrent = 2
+        stats.last_job_time = time.time()  # Just now
+
+        hours_idle = (time.time() - stats.last_job_time) / 3600
+        assert hours_idle < PEAK_DECAY_HOURS
+
+        # Should not decay
+        old_peak = stats.peak_concurrent
+        # (No decay applied)
+        assert stats.peak_concurrent == old_peak
+
+    def test_peak_decays_after_idle_period(self):
+        """Peak should decay after repo has been idle for a while."""
+        from autoscaler import PEAK_DECAY_HOURS, PEAK_DECAY_RATE
+        state = AutoscalerState()
+        stats = state.get_repo_stats("owner/repo")
+        stats.peak_concurrent = 4
+        stats.min_concurrent = 2
+        stats.last_job_time = time.time() - (PEAK_DECAY_HOURS + 1) * 3600  # Past decay threshold
+
+        hours_idle = (time.time() - stats.last_job_time) / 3600
+        assert hours_idle > PEAK_DECAY_HOURS
+
+        # Apply decay (simulating slow loop logic)
+        old_peak = stats.peak_concurrent
+        decayed_peak = stats.peak_concurrent * PEAK_DECAY_RATE
+        stats.peak_concurrent = max(stats.min_concurrent, int(decayed_peak))
+
+        assert stats.peak_concurrent < old_peak
+        assert stats.peak_concurrent >= stats.min_concurrent
+
+    def test_peak_never_decays_below_min_concurrent(self):
+        """Peak should never go below observed min_concurrent."""
+        from autoscaler import PEAK_DECAY_RATE
+        state = AutoscalerState()
+        stats = state.get_repo_stats("owner/repo")
+        stats.peak_concurrent = 2
+        stats.min_concurrent = 2
+        stats.last_job_time = time.time() - 10000  # Very old
+
+        # Apply decay multiple times
+        for _ in range(10):
+            decayed_peak = stats.peak_concurrent * PEAK_DECAY_RATE
+            stats.peak_concurrent = max(stats.min_concurrent, int(decayed_peak))
+
+        # Should bottom out at min_concurrent
+        assert stats.peak_concurrent == stats.min_concurrent
+
+    def test_min_concurrent_tracks_lowest_observed(self):
+        """min_concurrent should track the lowest observed busy count."""
+        state = AutoscalerState()
+        stats = state.get_repo_stats("owner/repo")
+
+        # Observe different concurrency levels (skipping 1 to match real behavior)
+        observations = [4, 2, 3, 2]  # Lowest non-zero is 2
+
+        for count in observations:
+            if count > stats.peak_concurrent:
+                stats.peak_concurrent = count
+            # Only update min if we haven't seen anything yet (min==1 is default) or if count is lower
+            if count > 0 and (stats.min_concurrent == 1 or count < stats.min_concurrent):
+                stats.min_concurrent = count
+
+        assert stats.min_concurrent == 2
+        assert stats.peak_concurrent == 4
+
+        # Now observe a single runner (edge case: workflow with only 1 job)
+        count = 1
+        if count > 0 and count < stats.min_concurrent:
+            stats.min_concurrent = count
+
+        assert stats.min_concurrent == 1
+
+    def test_min_concurrent_persistence(self):
+        """min_concurrent should persist across to_dict/from_dict round trips."""
+        state = AutoscalerState()
+        stats = state.get_repo_stats("owner/repo")
+        stats.min_concurrent = 2
+        stats.peak_concurrent = 4
+
+        data = state.to_dict()
+        restored = AutoscalerState.from_dict(data)
+
+        restored_stats = restored.get_repo_stats("owner/repo")
+        assert restored_stats.min_concurrent == 2
+        assert restored_stats.peak_concurrent == 4

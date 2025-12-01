@@ -45,6 +45,10 @@ MIN_RUNNERS = int(os.environ.get("MIN_RUNNERS", "1"))  # Always keep at least th
 IDLE_TIMEOUT_MINUTES = int(os.environ.get("IDLE_TIMEOUT_MINUTES", "10"))
 SPAWN_COOLDOWN_SECONDS = int(os.environ.get("SPAWN_COOLDOWN_SECONDS", "30"))  # Min time between spawns per repo
 
+# Peak decay config
+PEAK_DECAY_HOURS = int(os.environ.get("PEAK_DECAY_HOURS", "2"))  # Hours of inactivity before peak starts decaying
+PEAK_DECAY_RATE = float(os.environ.get("PEAK_DECAY_RATE", "0.95"))  # Decay multiplier per slow loop iteration
+
 # Resource estimates for spawning
 RUNNER_CPU_ESTIMATE = 50  # percent CPU for idle runner
 RUNNER_MEMORY_ESTIMATE = 100  # MB for idle runner
@@ -79,6 +83,7 @@ class RepoStats:
     frecency_score: float = 0.0
     avg_duration_seconds: float = 300.0  # default 5 min
     peak_concurrent: int = 1
+    min_concurrent: int = 1  # Observed minimum busy runners (used as decay floor)
     last_job_time: float = 0.0
     job_count: int = 0
     total_duration: float = 0.0
@@ -102,6 +107,7 @@ class AutoscalerState:
                     "frecency_score": stats.frecency_score,
                     "avg_duration_seconds": stats.avg_duration_seconds,
                     "peak_concurrent": stats.peak_concurrent,
+                    "min_concurrent": stats.min_concurrent,
                     "last_job_time": stats.last_job_time,
                     "job_count": stats.job_count,
                     "total_duration": stats.total_duration,
@@ -119,6 +125,7 @@ class AutoscalerState:
                 frecency_score=stats_data.get("frecency_score", 0.0),
                 avg_duration_seconds=stats_data.get("avg_duration_seconds", 300.0),
                 peak_concurrent=stats_data.get("peak_concurrent", 1),
+                min_concurrent=stats_data.get("min_concurrent", 1),
                 last_job_time=stats_data.get("last_job_time", 0.0),
                 job_count=stats_data.get("job_count", 0),
                 total_duration=stats_data.get("total_duration", 0.0),
@@ -527,6 +534,31 @@ class Autoscaler:
                     stats = self.state.get_repo_stats(repo)
                     if count > stats.peak_concurrent:
                         stats.peak_concurrent = count
+                    # Track minimum concurrent (never goes below what we actually observe)
+                    if count > 0 and (stats.min_concurrent == 1 or count < stats.min_concurrent):
+                        stats.min_concurrent = count
+
+                # === PEAK DECAY ===
+                # Gradually reduce peak_concurrent for repos that have been idle
+                # This prevents keeping too many pre-warmed runners for repos that had temporary bursts
+                for repo in repo_urls:
+                    stats = self.state.get_repo_stats(repo)
+                    hours_idle = (time.time() - stats.last_job_time) / 3600
+
+                    # Only decay if repo has been idle for a while
+                    if hours_idle > PEAK_DECAY_HOURS and stats.peak_concurrent > stats.min_concurrent:
+                        # Decay toward min_concurrent (observed minimum)
+                        old_peak = stats.peak_concurrent
+                        # Exponential decay: peak = peak * decay_rate
+                        # But never go below min_concurrent
+                        decayed_peak = stats.peak_concurrent * PEAK_DECAY_RATE
+                        stats.peak_concurrent = max(stats.min_concurrent, int(decayed_peak))
+
+                        if stats.peak_concurrent < old_peak:
+                            log.info(
+                                f"Decaying peak_concurrent for {repo}: {old_peak} -> {stats.peak_concurrent} "
+                                f"(idle for {hours_idle:.1f}h, min observed: {stats.min_concurrent})"
+                            )
 
                 # === DYNAMIC SCALING ===
                 # Pre-spawn runners based on historical peak usage
