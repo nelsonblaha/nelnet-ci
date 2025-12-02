@@ -690,6 +690,46 @@ async def remove_repo(owner: str, name: str, _: bool = Depends(verify_admin)):
     return {"status": "ok"}
 
 
+@app.post("/api/repos/{owner}/{repo}/sync-fork")
+async def sync_fork(owner: str, repo: str, _: bool = Depends(verify_admin)):
+    """Sync a fork with its upstream repository using GitHub API."""
+    if not GITHUB_TOKEN:
+        raise HTTPException(status_code=500, detail="GitHub token not configured")
+
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {GITHUB_TOKEN}"
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Trigger sync via GitHub API
+            resp = await client.post(
+                f"https://api.github.com/repos/{owner}/{repo}/merge-upstream",
+                headers=headers,
+                json={"branch": "main"}
+            )
+
+            if resp.status_code == 200 or resp.status_code == 201:
+                data = resp.json()
+                return {
+                    "status": "ok",
+                    "message": data.get("message", "Fork synced successfully"),
+                    "merge_type": data.get("merge_type")
+                }
+            elif resp.status_code == 409:
+                return {
+                    "status": "conflict",
+                    "message": "Merge conflict - manual resolution required"
+                }
+            else:
+                error_msg = resp.json().get("message", "Unknown error")
+                raise HTTPException(status_code=resp.status_code, detail=error_msg)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to sync fork: {str(e)}")
+
+
 @app.get("/api/approved-users")
 async def list_approved_users(_: bool = Depends(verify_read_access)):
     """List approved GitHub users."""
@@ -901,12 +941,20 @@ async def dashboard():
                                       :title="'Average of last ' + repo.avg_duration_sample_size + ' successful runs'"
                                       x-text="'~' + formatDuration(repo.avg_duration_seconds)"></span>
                                 <!-- Fork sync status badge -->
-                                <a x-show="repo.fork_status?.is_fork && !repo.fork_status?.in_sync"
-                                   :href="repo.fork_status?.sync_url" target="_blank"
-                                   class="bg-orange-600 hover:bg-orange-500 text-white px-2 py-1 rounded text-xs cursor-pointer"
-                                   :title="'Behind upstream by ' + repo.fork_status?.behind_by + ' commits'">
-                                    <span x-text="'↻ ' + repo.fork_status?.behind_by + ' behind'"></span>
-                                </a>
+                                <div x-show="repo.fork_status?.is_fork && !repo.fork_status?.in_sync" class="flex items-center gap-1">
+                                    <a :href="repo.fork_status?.sync_url" target="_blank"
+                                       class="bg-orange-600 hover:bg-orange-500 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                                       :title="'Behind upstream by ' + repo.fork_status?.behind_by + ' commits'">
+                                        <span x-text="'↻ ' + repo.fork_status?.behind_by + ' behind'"></span>
+                                    </a>
+                                    <button @click="syncFork(repo)" :disabled="!userInfo.isAdmin || repo.syncing"
+                                            :class="userInfo.isAdmin && !repo.syncing ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-600 cursor-not-allowed'"
+                                            class="text-white px-2 py-1 rounded text-xs"
+                                            :title="userInfo.isAdmin ? 'Sync fork with upstream' : 'Admin only'">
+                                        <span x-show="!repo.syncing">Update</span>
+                                        <span x-show="repo.syncing">Syncing...</span>
+                                    </button>
+                                </div>
                                 <span x-show="repo.fork_status?.is_fork && repo.fork_status?.in_sync"
                                       class="text-xs text-green-400" title="Fork is in sync with upstream">
                                     ✓ synced
@@ -1162,6 +1210,38 @@ async def dashboard():
                     headers: this.authHeader
                 });
                 await this.loadUsers();
+            },
+
+            async syncFork(repo) {
+                if (!confirm(`Sync ${repo.owner}/${repo.name} with upstream?`)) return;
+
+                // Set syncing flag
+                repo.syncing = true;
+
+                try {
+                    const resp = await fetch(`/api/repos/${repo.owner}/${repo.name}/sync-fork`, {
+                        method: 'POST',
+                        headers: this.authHeader
+                    });
+
+                    const result = await resp.json();
+
+                    if (resp.ok) {
+                        if (result.status === 'conflict') {
+                            alert('Merge conflict detected. Please resolve manually on GitHub.');
+                        } else {
+                            alert('Fork synced successfully!');
+                        }
+                        // Reload repos to update sync status
+                        await this.loadRepos();
+                    } else {
+                        alert(`Failed to sync: ${result.detail || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    alert(`Error syncing fork: ${e.message}`);
+                } finally {
+                    repo.syncing = false;
+                }
             },
 
             getStatusClass(status) {
