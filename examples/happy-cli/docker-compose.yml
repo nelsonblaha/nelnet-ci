@@ -1,0 +1,66 @@
+# GitHub Actions Self-Hosted Runner for happy-cli
+# Runs CI and deploys to nelnet production
+
+services:
+  runner:
+    image: github-runner-cypress:latest
+    restart: unless-stopped
+    container_name: github-runners-happy-cli
+    environment:
+      # Repository configuration
+      - REPO_URL=https://github.com/nelsonblaha/happy
+      - RUNNER_SCOPE=repo
+
+      # Authentication
+      - ACCESS_TOKEN=${GITHUB_PAT}
+
+      # Runner naming
+      - RUNNER_NAME_PREFIX=nelnet-happy-cli
+      - RANDOM_RUNNER_SUFFIX=true
+
+      # Labels for targeting
+      - LABELS=self-hosted,linux,x64,nelnet
+
+      # Work directory
+      - RUNNER_WORKDIR=/tmp/github-runner
+
+      # Ephemeral mode - runner restarts fresh after each job
+      - EPHEMERAL=true
+
+      # Disable automatic updates
+      - DISABLE_AUTO_UPDATE=true
+
+    volumes:
+      # Docker-in-docker support
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Persist runner data
+      - runner-data:/home/runner
+
+      # Mount happy source for deployments
+      - /home/ben/src/happy:/home/ben/src/happy
+
+      # Mount system paths for deployment scripts
+      - /usr/bin:/host/usr/bin:ro
+      - /usr/local/bin:/host/usr/local/bin:ro
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - default
+      - ci-shared
+
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "Runner.Listener"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  runner-data:
+
+networks:
+  ci-shared:
+    external: true

@@ -145,6 +145,8 @@ async def init_db():
                 name TEXT NOT NULL,
                 runner_group TEXT DEFAULT 'default',
                 allow_pr_tests BOOLEAN DEFAULT FALSE,
+                upstream_owner TEXT,
+                upstream_repo TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(owner, name)
             )
@@ -433,6 +435,37 @@ async def get_workflow_jobs(owner: str, repo: str) -> list:
     return jobs
 
 
+async def get_fork_sync_status(owner: str, repo: str, upstream_owner: str, upstream_repo: str) -> dict:
+    """Check if a fork is behind the upstream repository."""
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Compare fork with upstream
+            resp = await client.get(
+                f"https://api.github.com/repos/{upstream_owner}/{upstream_repo}/compare/{owner}:main...{upstream_owner}:main",
+                headers=headers
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                behind_by = data.get("behind_by", 0)
+                ahead_by = data.get("ahead_by", 0)
+
+                return {
+                    "is_fork": True,
+                    "upstream": f"{upstream_owner}/{upstream_repo}",
+                    "behind_by": behind_by,
+                    "ahead_by": ahead_by,
+                    "in_sync": behind_by == 0,
+                    "sync_url": f"https://github.com/{owner}/{repo}/compare/main...{upstream_owner}:main",
+                }
+            return {"is_fork": False, "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"is_fork": False, "error": str(e)}
+
+
 async def check_user_approved(username: str) -> bool:
     """Check if a GitHub user is in the approved list."""
     async with get_db() as db:
@@ -483,6 +516,8 @@ class RepoConfig(BaseModel):
     name: str
     runner_group: str = "default"
     allow_pr_tests: bool = False
+    upstream_owner: Optional[str] = None
+    upstream_repo: Optional[str] = None
 
 
 class ApprovedUser(BaseModel):
@@ -617,6 +652,15 @@ async def list_repos():
         repo["frecency"] = stats.get("frecency_score", 0)
         repo["peak_concurrent"] = stats.get("peak_concurrent", 1)
 
+        # Check fork sync status if upstream is configured
+        if repo.get("upstream_owner") and repo.get("upstream_repo"):
+            repo["fork_status"] = await get_fork_sync_status(
+                repo["owner"], repo["name"],
+                repo["upstream_owner"], repo["upstream_repo"]
+            )
+        else:
+            repo["fork_status"] = {"is_fork": False}
+
     await asyncio.gather(*[fetch_repo_data(repo) for repo in repos])
 
     return repos
@@ -628,8 +672,8 @@ async def add_repo(repo: RepoConfig, _: bool = Depends(verify_admin)):
     async with get_db() as db:
         try:
             await db.execute(
-                "INSERT INTO repos (owner, name, runner_group, allow_pr_tests) VALUES (?, ?, ?, ?)",
-                (repo.owner, repo.name, repo.runner_group, repo.allow_pr_tests)
+                "INSERT INTO repos (owner, name, runner_group, allow_pr_tests, upstream_owner, upstream_repo) VALUES (?, ?, ?, ?, ?, ?)",
+                (repo.owner, repo.name, repo.runner_group, repo.allow_pr_tests, repo.upstream_owner, repo.upstream_repo)
             )
             await db.commit()
             return {"status": "ok", "message": f"Added {repo.owner}/{repo.name}"}
@@ -856,6 +900,17 @@ async def dashboard():
                                 <span x-show="repo.avg_duration_seconds" class="text-xs text-gray-500"
                                       :title="'Average of last ' + repo.avg_duration_sample_size + ' successful runs'"
                                       x-text="'~' + formatDuration(repo.avg_duration_seconds)"></span>
+                                <!-- Fork sync status badge -->
+                                <a x-show="repo.fork_status?.is_fork && !repo.fork_status?.in_sync"
+                                   :href="repo.fork_status?.sync_url" target="_blank"
+                                   class="bg-orange-600 hover:bg-orange-500 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                                   :title="'Behind upstream by ' + repo.fork_status?.behind_by + ' commits'">
+                                    <span x-text="'↻ ' + repo.fork_status?.behind_by + ' behind'"></span>
+                                </a>
+                                <span x-show="repo.fork_status?.is_fork && repo.fork_status?.in_sync"
+                                      class="text-xs text-green-400" title="Fork is in sync with upstream">
+                                    ✓ synced
+                                </span>
                             </div>
                             <div class="flex items-center gap-3">
                                 <span x-show="repo.allow_pr_tests" class="text-xs text-yellow-400">PR tests enabled</span>
@@ -896,20 +951,33 @@ async def dashboard():
             </div>
 
             <!-- Add repo form -->
-            <div class="mt-4 flex flex-col sm:flex-row gap-2">
-                <input x-model="newRepo.owner" placeholder="owner" :disabled="!userInfo.isAdmin"
-                       :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
-                       class="px-3 py-2 rounded w-full sm:w-auto">
-                <input x-model="newRepo.name" placeholder="repo" :disabled="!userInfo.isAdmin"
-                       :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
-                       class="px-3 py-2 rounded w-full sm:w-auto">
-                <label class="flex items-center gap-2 py-2 sm:py-0" :class="!userInfo.isAdmin && 'opacity-50'">
-                    <input type="checkbox" x-model="newRepo.allow_pr_tests" :disabled="!userInfo.isAdmin">
-                    <span class="text-sm">Allow PR tests</span>
-                </label>
-                <button @click="addRepo()" :disabled="!userInfo.isAdmin"
-                        :class="userInfo.isAdmin ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'"
-                        class="px-4 py-2 rounded w-full sm:w-auto">Add</button>
+            <div class="mt-4 space-y-2">
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input x-model="newRepo.owner" placeholder="owner" :disabled="!userInfo.isAdmin"
+                           :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                           class="px-3 py-2 rounded w-full sm:w-auto">
+                    <input x-model="newRepo.name" placeholder="repo" :disabled="!userInfo.isAdmin"
+                           :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                           class="px-3 py-2 rounded w-full sm:w-auto">
+                    <label class="flex items-center gap-2 py-2 sm:py-0" :class="!userInfo.isAdmin && 'opacity-50'">
+                        <input type="checkbox" x-model="newRepo.allow_pr_tests" :disabled="!userInfo.isAdmin">
+                        <span class="text-sm">Allow PR tests</span>
+                    </label>
+                    <button @click="toggleUpstream()" :disabled="!userInfo.isAdmin" type="button"
+                            :class="userInfo.isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-600 cursor-not-allowed'"
+                            class="text-sm px-2">+ Upstream</button>
+                    <button @click="addRepo()" :disabled="!userInfo.isAdmin"
+                            :class="userInfo.isAdmin ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'"
+                            class="px-4 py-2 rounded w-full sm:w-auto">Add</button>
+                </div>
+                <div x-show="showUpstreamFields" class="flex flex-col sm:flex-row gap-2 ml-4">
+                    <input x-model="newRepo.upstream_owner" placeholder="upstream owner" :disabled="!userInfo.isAdmin"
+                           :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                           class="px-3 py-2 rounded w-full sm:w-auto text-sm">
+                    <input x-model="newRepo.upstream_repo" placeholder="upstream repo" :disabled="!userInfo.isAdmin"
+                           :class="userInfo.isAdmin ? 'bg-gray-700' : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+                           class="px-3 py-2 rounded w-full sm:w-auto text-sm">
+                </div>
             </div>
         </div>
 
@@ -972,7 +1040,7 @@ async def dashboard():
             config: {},
             buildInfo: { commit: '', message: '' },
             userInfo: { username: 'Loading...', isAdmin: false, authenticated: false },
-            newRepo: { owner: '', name: '', allow_pr_tests: false },
+            newRepo: { owner: '', name: '', allow_pr_tests: false, upstream_owner: '', upstream_repo: '' },
             newUsername: '',
             authHeader: { 'Authorization': 'Bearer ' + (localStorage.getItem('adminToken') || '') },
             lastReposUpdate: null,
@@ -980,6 +1048,7 @@ async def dashboard():
             maxFrecency: 0,
             minFrecency: 0,
             showFrecencyBars: false,
+            showUpstreamFields: false,
 
             async init() {
                 await this.loadUserInfo();
@@ -1047,13 +1116,23 @@ async def dashboard():
                 if (resp.ok) this.config = await resp.json();
             },
 
+            toggleUpstream() {
+                this.showUpstreamFields = !this.showUpstreamFields;
+            },
+
             async addRepo() {
+                const repoData = { ...this.newRepo };
+                // Clear upstream fields if they're empty
+                if (!repoData.upstream_owner) repoData.upstream_owner = null;
+                if (!repoData.upstream_repo) repoData.upstream_repo = null;
+
                 await fetch('/api/repos', {
                     method: 'POST',
                     headers: { ...this.authHeader, 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.newRepo)
+                    body: JSON.stringify(repoData)
                 });
-                this.newRepo = { owner: '', name: '', allow_pr_tests: false };
+                this.newRepo = { owner: '', name: '', allow_pr_tests: false, upstream_owner: '', upstream_repo: '' };
+                this.showUpstreamFields = false;
                 await this.loadRepos();
             },
 

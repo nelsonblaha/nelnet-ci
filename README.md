@@ -33,6 +33,7 @@ See [autoscaler/DESIGN.md](autoscaler/DESIGN.md) for architecture details.
 Web UI showing:
 - Runner containers and their status (idle/busy/paused)
 - Active workflow jobs per repo
+- Fork sync status for repositories (shows when fork is behind upstream)
 - Optional Plex transcode awareness
 
 ### 4. Reusable Workflows (`.github/workflows/`)
@@ -138,6 +139,21 @@ docker compose up -d
 **Dashboard:**
 - `GITHUB_TOKEN`: PAT for fetching workflow info
 - `PLEX_URL` / `PLEX_TOKEN`: Optional Plex integration
+
+### Fork Sync Status
+
+The dashboard can track fork repositories and show when they're behind upstream:
+
+1. When adding a repository in the dashboard, click "+ Upstream" to reveal upstream fields
+2. Enter the upstream owner and repo name (e.g., for a fork of `slopus/happy`, enter `slopus` and `happy`)
+3. The dashboard will show:
+   - **In sync**: Green "✓ synced" badge
+   - **Behind**: Orange "↻ X behind" clickable badge that links to GitHub's compare view
+
+This is useful for:
+- Monitoring when your fork needs to sync with upstream
+- Quick access to GitHub's sync/PR interface
+- Tracking multiple forks in one dashboard
 
 ## Security Notes
 
